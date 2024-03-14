@@ -7,15 +7,19 @@ def set_seed(seed):
     torch.random.manual_seed(seed)
 
 
-def get_wikitext2(nsamples, seed, seqlen, model, force_train_as_val=False):
+def get_wikitext2(nsamples, seed, seqlen, model, gen_train_headmaps=False):
     from datasets import load_dataset
-    traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
+    split = 'train'
+    traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split=split)
     testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
 
     from transformers import AutoTokenizer 
     tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
     trainenc = tokenizer("\n\n".join(traindata['text']), return_tensors='pt')
-    testenc = tokenizer("\n\n".join(testdata['text']), return_tensors='pt')
+    if gen_train_headmaps:
+        testenc = tokenizer("\n\n".join(traindata['text']), return_tensors='pt')
+    else:
+        testenc = tokenizer("\n\n".join(testdata['text']), return_tensors='pt')
 
     import random
     random.seed(seed)
@@ -29,15 +33,18 @@ def get_wikitext2(nsamples, seed, seqlen, model, force_train_as_val=False):
         trainloader.append((inp, tar))
     return trainloader, testenc
 
-def get_ptb(nsamples, seed, seqlen, model, force_train_as_val=False):
+def get_ptb(nsamples, seed, seqlen, model, gen_train_headmaps=False):
     from datasets import load_dataset
-    traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train')
+    split = 'train'
+    traindata = load_dataset('ptb_text_only', 'penn_treebank', split=split)
     valdata = load_dataset('ptb_text_only', 'penn_treebank', split='validation')
+    # if gen_train_headmaps:
+    #     traindata = valdata
 
     from transformers import AutoTokenizer 
     tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
     trainenc = tokenizer("\n\n".join(traindata['sentence']), return_tensors='pt')
-    if force_train_as_val:
+    if gen_train_headmaps:
         testenc = tokenizer("\n\n".join(traindata['sentence']), return_tensors='pt')
     else:
         testenc = tokenizer("\n\n".join(valdata['sentence']), return_tensors='pt')
@@ -54,13 +61,15 @@ def get_ptb(nsamples, seed, seqlen, model, force_train_as_val=False):
         trainloader.append((inp, tar))
     return trainloader, testenc
 
-def get_c4(nsamples, seed, seqlen, model, force_train_as_val=False):
+def get_c4(nsamples, seed, seqlen, model, gen_train_headmaps=False):
     from datasets import load_dataset
+    split = 'train'
+    tfile = 'en/c4-train.00000-of-01024.json.gz'
     traindata = load_dataset(
-        'allenai/c4', 'allenai--c4', data_files={'train': 'en/c4-train.00000-of-01024.json.gz'}, split='train'
+        'allenai/c4', data_files={split: tfile}, split=split
     )
     valdata = load_dataset(
-        'allenai/c4', 'allenai--c4', data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'}, split='validation'
+        'allenai/c4', data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'}, split='validation'
     )
 
     from transformers import AutoTokenizer
@@ -73,7 +82,7 @@ def get_c4(nsamples, seed, seqlen, model, force_train_as_val=False):
         while True:
             i = random.randint(0, len(traindata) - 1)
             trainenc = tokenizer(traindata[i]['text'], return_tensors='pt')
-            if trainenc.input_ids.shape[1] >= seqlen:
+            if trainenc.input_ids.shape[1] > seqlen:
                 break
         i = random.randint(0, trainenc.input_ids.shape[1] - seqlen - 1)
         j = i + seqlen
@@ -84,12 +93,16 @@ def get_c4(nsamples, seed, seqlen, model, force_train_as_val=False):
 
     import random
     random.seed(0)
+    if gen_train_headmaps:
+        split = 'train'
+        tfile = 'en/c4-train.00000-of-01024.json.gz'
+        valdata = load_dataset('allenai/c4', data_files={split: tfile}, split=split)
     valenc = []
     for _ in range(256):
         while True:
             i = random.randint(0, len(valdata) - 1)
             tmp = tokenizer(valdata[i]['text'], return_tensors='pt')
-            if tmp.input_ids.shape[1] >= seqlen:
+            if tmp.input_ids.shape[1] > seqlen:
                 break
         i = random.randint(0, tmp.input_ids.shape[1] - seqlen - 1)
         j = i + seqlen
@@ -102,15 +115,21 @@ def get_c4(nsamples, seed, seqlen, model, force_train_as_val=False):
 
     return trainloader, valenc 
 
-def get_ptb_new(nsamples, seed, seqlen, model, force_train_as_val=False):
+def get_ptb_new(nsamples, seed, seqlen, model, gen_train_headmaps=False):
     from datasets import load_dataset
-    traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train')
+    split = 'train'
+    traindata = load_dataset('ptb_text_only', 'penn_treebank', split=split)
     testdata = load_dataset('ptb_text_only', 'penn_treebank', split='test')
+    if gen_train_headmaps:
+        traindata = testdata
 
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
     trainenc = tokenizer(" ".join(traindata['sentence']), return_tensors='pt')
-    testenc = tokenizer(" ".join(testdata['sentence']), return_tensors='pt')
+    if gen_train_headmaps:
+        testenc = tokenizer(" ".join(traindata['sentence']), return_tensors='pt')
+    else:
+        testenc = tokenizer(" ".join(testdata['sentence']), return_tensors='pt')
 
     import random
     random.seed(seed)
@@ -124,14 +143,18 @@ def get_ptb_new(nsamples, seed, seqlen, model, force_train_as_val=False):
         trainloader.append((inp, tar))
     return trainloader, testenc
 
-def get_c4_new(nsamples, seed, seqlen, model, force_train_as_val=False):
+def get_c4_new(nsamples, seed, seqlen, model, gen_train_headmaps=False):
     from datasets import load_dataset
+    split = 'train'
+    tfile = 'en/c4-train.00000-of-01024.json.gz'
     traindata = load_dataset(
-        'allenai/c4', 'allenai--c4', data_files={'train': 'en/c4-train.00000-of-01024.json.gz'}, split='train'
+        'allenai/c4', 'en', data_files={'train': tfile}, split=split
     )
     valdata = load_dataset(
-        'allenai/c4', 'allenai--c4', data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'}, split='validation'
+        'allenai/c4', 'en', data_files={'validation': 'en/c4-validation.00000-of-00008.json.gz'}, split='validation'
     )
+    if gen_train_headmaps:
+        traindata = valdata
 
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False)
@@ -152,7 +175,10 @@ def get_c4_new(nsamples, seed, seqlen, model, force_train_as_val=False):
         tar[:, :-1] = -100
         trainloader.append((inp, tar))
 
-    valenc = tokenizer(' '.join(valdata[:1100]['text']), return_tensors='pt')
+    if gen_train_headmaps:
+        valenc = tokenizer(' '.join(traindata[:1100]['text']), return_tensors='pt')
+    else:
+        valenc = tokenizer(' '.join(valdata[:1100]['text']), return_tensors='pt')
     valenc = valenc.input_ids[:, :(256 * seqlen)]
 
     class TokenizerWrapper:
@@ -164,15 +190,15 @@ def get_c4_new(nsamples, seed, seqlen, model, force_train_as_val=False):
 
 
 def get_loaders(
-    name, nsamples=128, seed=0, seqlen=2048, model='', force_train_as_val=False
+    name, nsamples=128, seed=0, seqlen=2048, model='', gen_train_headmaps=False
 ):
     if 'wikitext2' in name:
-        return get_wikitext2(nsamples, seed, seqlen, model, force_train_as_val)
+        return get_wikitext2(nsamples, seed, seqlen, model, gen_train_headmaps)
     if 'ptb' in name:
         if 'new' in name:
-            return get_ptb_new(nsamples, seed, seqlen, model, force_train_as_val)
-        return get_ptb(nsamples, seed, seqlen, model, force_train_as_val)
+            return get_ptb_new(nsamples, seed, seqlen, model, gen_train_headmaps)
+        return get_ptb(nsamples, seed, seqlen, model, gen_train_headmaps)
     if 'c4' in name:
         if 'new' in name:
-            return get_c4_new(nsamples, seed, seqlen, model, force_train_as_val)
-        return get_c4(nsamples, seed, seqlen, model, force_train_as_val)
+            return get_c4_new(nsamples, seed, seqlen, model, gen_train_headmaps)
+        return get_c4(nsamples, seed, seqlen, model, gen_train_headmaps)

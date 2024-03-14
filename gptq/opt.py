@@ -9,6 +9,7 @@ from quant import *
 from functools import partial
 
 from tqdm import tqdm
+import os
 
 def get_opt(model):
     import torch
@@ -132,7 +133,7 @@ def opt_sequential(model, dataloader, dev):
     return quantizers
 
 @torch.no_grad()
-def opt_eval(model, testenc, dev, force_train_as_val=False, dataset="ptb"):
+def opt_eval(model, testenc, dev, gen_train_headmaps=False, dataset="ptb"):
     print('Evaluating ...')
 
     testenc = testenc.input_ids
@@ -187,10 +188,6 @@ def opt_eval(model, testenc, dev, force_train_as_val=False, dataset="ptb"):
     outs = torch.zeros_like(inps)
     attention_mask = cache['attention_mask']
 
-    # # Attach the hook to each layer
-    # for i, layer in enumerate(model.model.decoder.layers):
-    #     layer.module.self_attn.register_forward_hook(partial(capture_activations, i))
-    # samp_layer_head_dict = {k: {l: [] for l in range(len(layers))} for k in range(nsamples)}
     samp_layer_act_dict = {j: {"inp": None,} | {l: [] for l in range(len(layers))} for j in range(nsamples)}
     for j in range(nsamples):
         samp_layer_act_dict[j]["inp"]  = inps[j].detach().to("cpu")
@@ -212,26 +209,32 @@ def opt_eval(model, testenc, dev, force_train_as_val=False, dataset="ptb"):
                 ).to(next(iter(layer.parameters())).dtype)
         for j in tqdm(range(nsamples)):
             acts_ = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, output_attentions=True)
-            # samp_layer_act_dict[j][i].append(acts_[1].detach().to("cpu").squeeze().abs().mean(dim=1).max(dim=1)[0].tolist())
             samp_layer_act_dict[j][i].append(acts_[1].squeeze().abs().mean(dim=1).max(dim=1)[0].detach().to("cpu").tolist())
             outs[j] = acts_[0]
-        # for j in range(nsamples):
-        #     if j < 6:
-        #         acts_ = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, output_attentions=True)
-        #         outs[j] = acts_[0]
-        #         samp_layer_head_dict[j][i].append(acts_[1].detach().to("cpu"))
         layers[i] = layer.cpu()
         del layer
         torch.cuda.empty_cache()
         inps, outs = outs, inps
 
     # # Save as quant_attns_{args.wbits}.pt model file
-    tov = "T" if force_train_as_val else "V"
-    torch.save(samp_layer_act_dict, f'./transformeremulator/quant_headacts_{dataset}_{tov}_{args.wbits}_{args.model.replace("facebook/", "")}_.pt')
+    tov = "T" if gen_train_headmaps else "V"
+    torch.save(samp_layer_act_dict, f'./opt_{args.model.replace("facebook/", "")}_dataset/quant_headacts_{dataset}_{tov}_{args.wbits}_{args.model.replace("facebook/", "")}_.pt')
     exit(0)
+            # Here, use acts_[1] to identify the attention heads
+            # pheadact = acts_[1].squeeze().abs().mean(dim=1).max(dim=1)[0] --> This will give you per-head importance
+            # Use pheadact to modify acts_[0] and then pass it to the next layer (by assigning to outs[j])
+    # # Attach the hook to each layer
+    # for i, layer in enumerate(model.model.decoder.layers):
+    #     layer.module.self_attn.register_forward_hook(partial(capture_activations, i))
+    # samp_layer_head_dict = {k: {l: [] for l in range(len(layers))} for k in range(nsamples)}
     # Save as quant_attns_{args.wbits}.pt model file
     # torch.save(samp_layer_head_dict, f'quant_attns_{args.wbits}_{args.model.replace("facebook/", "")}_.pt')
     # exit(0)
+        # for j in range(nsamples):
+        #     if j < 6:
+        #         acts_ = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, output_attentions=True)
+        #         outs[j] = acts_[0]
+        #         samp_layer_head_dict[j][i].append(acts_[1].detach().to("cpu"))
     if model.model.decoder.final_layer_norm is not None:
         model.model.decoder.final_layer_norm = model.model.decoder.final_layer_norm.to(dev)
     if model.model.decoder.project_out is not None:
@@ -438,6 +441,10 @@ if __name__ == '__main__':
         help='Whether to perform symmetric quantization.'
     )
     parser.add_argument(
+        '--gen_train_headmaps', action='store_true',
+        help='Whether to generate head-normalized activation maps for training or validation dataset.'
+    )
+    parser.add_argument(
         '--save', type=str, default='',
         help='Save quantized checkpoint under this name.'
     )
@@ -502,16 +509,24 @@ if __name__ == '__main__':
     # datasets = ['wikitext2', 'ptb', 'c4'] 
     # if args.new_eval:
     #   datasets = ['wikitext2', 'ptb-new', 'c4-new']
-    datasets = ['wikitext2', 'ptb', 'c4'][1:]
-    if args.new_eval:
-      datasets = ['wikitext2', 'ptb-new', 'c4-new'][1:]
-    force_train_as_val = False
+    # Make f'./opt_{args.model.replace("facebook/", "")}_dataset' dir
+    os.makedirs(f'./opt_{args.model.replace("facebook/", "")}_dataset', exist_ok=True)
+    # datasets = ['wikitext2', 'ptb', 'c4'][1:]
+    
+    datasets = [args.dataset]
+    gen_train_headmaps = args.gen_train_headmaps
+    # import pdb; pdb.set_trace()
     for dataset in datasets: 
-        dataloader, testloader = get_loaders(
-            dataset, seed=args.seed, model=args.model, seqlen=model.seqlen, force_train_as_val=force_train_as_val
-        )
+        if gen_train_headmaps:
+            dataloader, testloader = get_loaders(
+                dataset, seed=args.seed, model=args.model, seqlen=model.seqlen, gen_train_headmaps=gen_train_headmaps
+            )
+        else:
+            dataloader, testloader = get_loaders(
+                dataset, nsamples=2048, seed=args.seed, model=args.model, seqlen=model.seqlen, gen_train_headmaps=gen_train_headmaps
+            )
         print(dataset)
-        opt_eval(model, testloader, DEV, force_train_as_val=force_train_as_val, dataset=dataset)
+        opt_eval(model, testloader, DEV, gen_train_headmaps=gen_train_headmaps, dataset=dataset)
 
     if args.save:
         opt_pack3(model, quantizers)

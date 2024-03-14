@@ -8,6 +8,7 @@ import scipy
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
+import argparse
 
 class SequenceModel(nn.Module):
     def __init__(self, seq_len=2048, embedding_dim=1024, output_dim=16, conv_out_channels=256):
@@ -63,22 +64,30 @@ class SequenceDataset(Dataset):
         return len(self.dataset)
 
     def __getitem__(self, idx):
-        input_matrix = np.asarray(self.dataset[idx]['inp'].tolist())  # (2048, 1024) input matrix
+        input_matrix = np.asarray(self.dataset[idx]['inp']).squeeze()  # (2048, 1024) input matrix
         target = np.asarray(self.dataset[idx][self.layerid][0])            # 16 element target list
         return torch.tensor(input_matrix, dtype=torch.float), torch.tensor(target, dtype=torch.float)
 
-# Prepare DataLoader for training and testing
-batch_size = 32  # Define your batch size
+# Argparse
+parser = argparse.ArgumentParser(description='Train model for prediction heads')
+parser.add_argument('--dataset', type=str, default='wikitext2', help='c4/wikitext2/ptb')
+parser.add_argument('--model', type=str, default='opt-1.3b', help='c4/wikitext2/ptb')
+parser.add_argument('--seed', type=int, default=42, help='random seed')
+args = parser.parse_args()
 
-trainset = torch.load("./transformeremulator/quant_headacts_T_16_opt-350m_.pt")
-testset = torch.load("./transformeremulator/quant_headacts_V_16_opt-350m_.pt")
+
+# Prepare DataLoader for training and testing
+batch_size = 16  # Define your batch size
+
+trainset = torch.load(f'./opt_{args.model}_dataset/quant_headacts_{args.dataset}_T_16_{args.model}_.pt')
+testset = torch.load(f'./opt_{args.model}_dataset/quant_headacts_{args.dataset}_V_16_{args.model}_.pt')
 
 print("Data loaded")
 
 layer_kdt = {}
 # import pdb; pdb.set_trace()
 for layerid in [x for x in list(trainset[0].keys()) if isinstance(x, int)]:
-    num_epochs = 2  # Define your number of epochs
+    num_epochs = 10  # Define your number of epochs
     train_dataset = SequenceDataset(trainset, layerid)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
@@ -90,7 +99,11 @@ for layerid in [x for x in list(trainset[0].keys()) if isinstance(x, int)]:
 
     # Initialize the model, loss criterion, and optimizer
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = SequenceModel().to(device)
+    samp_p = next(iter(train_loader))
+    odim = samp_p[1].shape[-1]
+    seqlen = samp_p[0].shape[1]
+    embdim = samp_p[0].shape[2]
+    model = SequenceModel(seq_len=seqlen, embedding_dim=embdim, output_dim=odim, conv_out_channels=256).to(device)
 
     print("Model created")
 
@@ -141,6 +154,8 @@ for layerid in [x for x in list(trainset[0].keys()) if isinstance(x, int)]:
     layer_kdt[layerid] = kdt_register
     test_loss /= len(test_loader)
     print(f"Test L2 Loss: {test_loss}")
+    # Save model as opt_{args.model}_{args.dataset}_{layerid}.pt
+    torch.save(model, f'./opt_{args.model}_{args.dataset}_model/opt_{args.model}_{args.dataset}_{layerid}.pt')
 
 # create director headmlpaggr
 sample_dir = 'headmlpaggr'
