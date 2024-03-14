@@ -132,6 +132,16 @@ def opt_sequential(model, dataloader, dev):
     
     return quantizers
 
+def get_smallest_indices(tensor, num):
+    # Convert the tensor to a NumPy array if it's not already
+    if not isinstance(tensor, np.ndarray):
+        tensor = np.array(tensor.cpu())
+    
+    # Get the indices of the smallest num elements
+    smallest_indices = np.argpartition(tensor, num)[:num]
+    
+    return smallest_indices
+
 @torch.no_grad()
 def opt_eval(model, testenc, dev, gen_train_headmaps=False, dataset="ptb"):
     print('Evaluating ...')
@@ -188,7 +198,11 @@ def opt_eval(model, testenc, dev, gen_train_headmaps=False, dataset="ptb"):
     outs = torch.zeros_like(inps)
     attention_mask = cache['attention_mask']
 
-    samp_layer_act_dict = {j: {"inp": None,} | {l: [] for l in range(len(layers))} for j in range(nsamples)}
+    # # Attach the hook to each layer
+    # for i, layer in enumerate(model.model.decoder.layers):
+    #     layer.module.self_attn.register_forward_hook(partial(capture_activations, i))
+    # samp_layer_head_dict = {k: {l: [] for l in range(len(layers))} for k in range(nsamples)}
+    samp_layer_act_dict = {j: {"inp": None, **{l: [] for l in range(len(layers))}} for j in range(nsamples)}
     for j in range(nsamples):
         samp_layer_act_dict[j]["inp"]  = inps[j].detach().to("cpu")
     for i in range(len(layers)):
@@ -208,18 +222,32 @@ def opt_eval(model, testenc, dev, gen_train_headmaps=False, dataset="ptb"):
                     W, quantizer.scale, quantizer.zero, quantizer.maxq
                 ).to(next(iter(layer.parameters())).dtype)
         for j in tqdm(range(nsamples)):
+            # inps.shape = (nsamples, seqlen, hidden_size)
             acts_ = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, output_attentions=True)
             samp_layer_act_dict[j][i].append(acts_[1].squeeze().abs().mean(dim=1).max(dim=1)[0].detach().to("cpu").tolist())
+
+            head_importance = acts_[1].squeeze().abs().mean(dim=1).max(dim=1)[0]
+            pruned_heads = get_smallest_indices(head_importance, 2)
+
+            # In inps, set the value of the inputs going to the pruned heads to 0
+            head_size = acts_[0].shape[1] // acts_[1].shape[1]
+            for ind in pruned_heads:
+                for k in range(head_size):
+                    inps[j, :, ind * head_size + k] = 0
+
+            acts_ = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, output_attentions=True)
+            
             outs[j] = acts_[0]
         layers[i] = layer.cpu()
         del layer
         torch.cuda.empty_cache()
+
+        
         inps, outs = outs, inps
 
     # # Save as quant_attns_{args.wbits}.pt model file
     tov = "T" if gen_train_headmaps else "V"
     torch.save(samp_layer_act_dict, f'./opt_{args.model.replace("facebook/", "")}_dataset/quant_headacts_{dataset}_{tov}_{args.wbits}_{args.model.replace("facebook/", "")}_.pt')
-    exit(0)
             # Here, use acts_[1] to identify the attention heads
             # pheadact = acts_[1].squeeze().abs().mean(dim=1).max(dim=1)[0] --> This will give you per-head importance
             # Use pheadact to modify acts_[0] and then pass it to the next layer (by assigning to outs[j])
@@ -254,7 +282,7 @@ def opt_eval(model, testenc, dev, gen_train_headmaps=False, dataset="ptb"):
         shift_labels = testenc[
             :, (i * model.seqlen):((i + 1) * model.seqlen)
         ][:, 1:]
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         loss_fct = nn.CrossEntropyLoss()
         loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
         neg_log_likelihood = loss.float() * model.seqlen
