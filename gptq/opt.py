@@ -10,6 +10,7 @@ from functools import partial
 
 from tqdm import tqdm
 import os
+import copy
 
 def get_opt(model):
     import torch
@@ -227,16 +228,30 @@ def opt_eval(model, testenc, dev, gen_train_headmaps=False, dataset="ptb"):
             samp_layer_act_dict[j][i].append(acts_[1].squeeze().abs().mean(dim=1).max(dim=1)[0].detach().to("cpu").tolist())
 
             head_importance = acts_[1].squeeze().abs().mean(dim=1).max(dim=1)[0]
-            pruned_heads = get_smallest_indices(head_importance, 2)
+            pruned_heads = get_smallest_indices(head_importance, 10)
 
             # In inps, set the value of the inputs going to the pruned heads to 0
             head_size = acts_[0].shape[1] // acts_[1].shape[1]
+            pruned_layer = copy.deepcopy(layer)
             for ind in pruned_heads:
                 for k in range(head_size):
-                    inps[j, :, ind * head_size + k] = 0
+                    # Setting full input of the layer to 0. This is not the correct way to prune the heads as the projections of K,Q,V shouldn't receive 0s.
+                    # inps[j, :, ind * head_size + k] = 0
+                    # Setting the weights of the out projection after attention to 0. I think this should match pruning the head.
+                    # pruned_layer.self_attn.out_proj.weight.data[ind * head_size + k, :] = 0
+                    # Setting the outputs of the K,Q,V projections to 0. This should likely match the output of the above.
+                    pruned_layer.self_attn.v_proj.weight.data[:,ind * head_size + k] = 0
+                    pruned_layer.self_attn.v_proj.bias.data[ind * head_size + k] = 0
+                    # pruned_layer.self_attn.k_proj.weight.data[ind * head_size + k, :] = 0
+                    # pruned_layer.self_attn.k_proj.bias.data[ind * head_size + k] = 0
+                    # pruned_layer.self_attn.q_proj.weight.data[ind * head_size + k, :] = 0
+                    # pruned_layer.self_attn.q_proj.bias.data[ind * head_size + k] = 0
 
-            acts_ = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, output_attentions=True)
+            # import pdb; pdb.set_trace()
+
+            acts_ = pruned_layer(inps[j].unsqueeze(0), attention_mask=attention_mask, output_attentions=True)
             
+            del pruned_layer
             outs[j] = acts_[0]
         layers[i] = layer.cpu()
         del layer
