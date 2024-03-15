@@ -168,6 +168,7 @@ class OPTAttention(nn.Module):
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         attention_mask: Optional[torch.Tensor] = None,
         layer_head_mask: Optional[torch.Tensor] = None,
+        headmask: Optional[torch.Tensor] = None,
         output_attentions: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
@@ -214,7 +215,6 @@ class OPTAttention(nn.Module):
         query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
         key_states = key_states.view(*proj_shape)
         value_states = value_states.view(*proj_shape)
-
         src_len = key_states.size(1)
         attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
 
@@ -269,7 +269,17 @@ class OPTAttention(nn.Module):
                 f" {attn_output.size()}"
             )
 
-        attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
+        if headmask is not None:
+            cache_shape = attn_output.shape
+            attn_output = attn_output.view(bsz, self.num_heads, headmask.shape[1], tgt_len//headmask.shape[1], self.head_dim)
+            # Now, attn_output is of shape (B, H, P, L/P, Q)
+            # headmask is of shape (H, P)
+            # wherever headmask[h,p] == 0, we want to make those attn_output[h,p] == 0
+            attn_output = attn_output * headmask.view(1, headmask.shape[0], headmask.shape[1], 1, 1)
+            attn_output = attn_output.view(cache_shape)
+            # import pdb; pdb.set_trace()
+        else:
+            attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
         attn_output = attn_output.transpose(1, 2)
 
         # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
@@ -523,6 +533,7 @@ class OPTDecoderLayer(nn.Module):
         layer_head_mask: Optional[torch.Tensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: Optional[bool] = False,
+        headmask: Optional[torch.Tensor] = None,
         use_cache: Optional[bool] = False,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """
@@ -554,6 +565,7 @@ class OPTDecoderLayer(nn.Module):
             attention_mask=attention_mask,
             layer_head_mask=layer_head_mask,
             output_attentions=output_attentions,
+            headmask=headmask
         )
         # import pdb; pdb.set_trace()
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)

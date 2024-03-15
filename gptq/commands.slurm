@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J allnasspace
-#SBATCH -o /home/ya255/projects/shadow_llm/gptq/arch2vec/large_scale_run_logs/large_allss_%j.out
-#SBATCH -e /home/ya255/projects/shadow_llm/gptq/arch2vec/large_scale_run_logs/large_allss_%j.err
+#SBATCH -o /home/ya255/projects/shadow_llm/gptq/large_scale_run_logs/rt%j.out
+#SBATCH -e /home/ya255/projects/shadow_llm/gptq/large_scale_run_logs/rt%j.err
 #SBATCH -N 1
 #SBATCH --mem=100000
 #SBATCH -t 48:00:00

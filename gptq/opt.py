@@ -188,9 +188,9 @@ def opt_eval(model, testenc, dev, gen_train_headmaps=False, dataset="ptb"):
     outs = torch.zeros_like(inps)
     attention_mask = cache['attention_mask']
 
-    samp_layer_act_dict = {j: {"inp": None,} | {l: [] for l in range(len(layers))} for j in range(nsamples)}
-    for j in range(nsamples):
-        samp_layer_act_dict[j]["inp"]  = inps[j].detach().to("cpu")
+    # samp_layer_act_dict = {j: {"inp": None,} | {l: [] for l in range(len(layers))} for j in range(nsamples)}
+    # for j in range(nsamples):
+    #     samp_layer_act_dict[j]["inp"]  = inps[j].detach().to("cpu")
     for i in range(len(layers)):
         print(i)
         layer = layers[i].to(dev)
@@ -209,7 +209,20 @@ def opt_eval(model, testenc, dev, gen_train_headmaps=False, dataset="ptb"):
                 ).to(next(iter(layer.parameters())).dtype)
         for j in tqdm(range(nsamples)):
             acts_ = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, output_attentions=True)
-            samp_layer_act_dict[j][i].append(acts_[1].squeeze().abs().mean(dim=1).max(dim=1)[0].detach().to("cpu").tolist())
+            if args.oracle_sparsify:
+                headactmap = acts_[1]
+                shardshape = (headactmap.shape[0], headactmap.shape[1], args.shardfactor, headactmap.shape[2] // args.shardfactor, headactmap.shape[3])
+                headactmap = headactmap.view(shardshape).squeeze()
+                # TODO(Ahmed): This equation likely needs fixing.
+                # headacts = headactmap.abs().mean(dim=2).max(dim=2)[0].detach()
+                headacts = headactmap.abs().max(dim=2)[0].max(dim=2)[0].detach()
+                headacts[headacts < torch.quantile(headacts.float(), args.sparse_percentile)] = 0
+                headacts[headacts != 0] = 1
+                acts_ = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, output_attentions=True, headmask=headacts)
+            # convert to 1 and 0, threshold at 70% of magnitude
+            # get 60th percentile activation
+            # get thresholds for headacts
+            # samp_layer_act_dict[j][i].append(acts_[1].squeeze().abs().mean(dim=1).max(dim=1)[0].detach().to("cpu").tolist())
             outs[j] = acts_[0]
         layers[i] = layer.cpu()
         del layer
@@ -217,24 +230,9 @@ def opt_eval(model, testenc, dev, gen_train_headmaps=False, dataset="ptb"):
         inps, outs = outs, inps
 
     # # Save as quant_attns_{args.wbits}.pt model file
-    tov = "T" if gen_train_headmaps else "V"
-    torch.save(samp_layer_act_dict, f'./opt_{args.model.replace("facebook/", "")}_dataset/quant_headacts_{dataset}_{tov}_{args.wbits}_{args.model.replace("facebook/", "")}_.pt')
-    exit(0)
-            # Here, use acts_[1] to identify the attention heads
-            # pheadact = acts_[1].squeeze().abs().mean(dim=1).max(dim=1)[0] --> This will give you per-head importance
-            # Use pheadact to modify acts_[0] and then pass it to the next layer (by assigning to outs[j])
-    # # Attach the hook to each layer
-    # for i, layer in enumerate(model.model.decoder.layers):
-    #     layer.module.self_attn.register_forward_hook(partial(capture_activations, i))
-    # samp_layer_head_dict = {k: {l: [] for l in range(len(layers))} for k in range(nsamples)}
-    # Save as quant_attns_{args.wbits}.pt model file
-    # torch.save(samp_layer_head_dict, f'quant_attns_{args.wbits}_{args.model.replace("facebook/", "")}_.pt')
+    # tov = "T" if gen_train_headmaps else "V"
+    # torch.save(samp_layer_act_dict, f'./opt_{args.model.replace("facebook/", "")}_dataset/quant_headacts_{dataset}_{tov}_{args.wbits}_{args.model.replace("facebook/", "")}_.pt')
     # exit(0)
-        # for j in range(nsamples):
-        #     if j < 6:
-        #         acts_ = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, output_attentions=True)
-        #         outs[j] = acts_[0]
-        #         samp_layer_head_dict[j][i].append(acts_[1].detach().to("cpu"))
     if model.model.decoder.final_layer_norm is not None:
         model.model.decoder.final_layer_norm = model.model.decoder.final_layer_norm.to(dev)
     if model.model.decoder.project_out is not None:
@@ -254,7 +252,6 @@ def opt_eval(model, testenc, dev, gen_train_headmaps=False, dataset="ptb"):
         shift_labels = testenc[
             :, (i * model.seqlen):((i + 1) * model.seqlen)
         ][:, 1:]
-        import pdb; pdb.set_trace()
         loss_fct = nn.CrossEntropyLoss()
         loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
         neg_log_likelihood = loss.float() * model.seqlen
@@ -417,7 +414,15 @@ if __name__ == '__main__':
         help='Number of calibration data samples.'
     )
     parser.add_argument(
+        '--shardfactor', type=int, default=8,
+        help='How many sparsity blocks to make per head-sequence length pair.'
+    )
+    parser.add_argument(
         '--percdamp', type=float, default=.01,
+        help='Percent of the average Hessian diagonal to use for dampening.'
+    )
+    parser.add_argument(
+        '--sparse_percentile', type=float, default=.0,
         help='Percent of the average Hessian diagonal to use for dampening.'
     )
     parser.add_argument(
@@ -431,6 +436,10 @@ if __name__ == '__main__':
     parser.add_argument(
         '--trits', action='store_true',
         help='Whether to use trits for quantization.'
+    )
+    parser.add_argument(
+        '--oracle_sparsify', action='store_true',
+        help='Whether to use oracle head information for head pruning.'
     )
     parser.add_argument(
         '--groupsize', type=int, default=-1,

@@ -155,10 +155,11 @@ for layerid in [x for x in list(trainset[0].keys()) if isinstance(x, int)]:
     test_loss /= len(test_loader)
     print(f"Test L2 Loss: {test_loss}")
     # Save model as opt_{args.model}_{args.dataset}_{layerid}.pt
+    os.makedirs(f'./opt_{args.model}_{args.dataset}_model', exist_ok=True)
     torch.save(model, f'./opt_{args.model}_{args.dataset}_model/opt_{args.model}_{args.dataset}_{layerid}.pt')
 
 # create director headmlpaggr
-sample_dir = 'headmlpaggr'
+sample_dir = 'final_tests'
 os.makedirs(sample_dir, exist_ok=True)
 
 for datap in range(len(layer_kdt[0])):
