@@ -28,6 +28,7 @@ def simple_evaluate(
     decontamination_ngrams_path=None,
     head_importance_calc=False,
     save_importance_path=None,
+    method="original"
 ):
 
     """Instantiate and evaluate a model on a list of tasks.
@@ -110,6 +111,7 @@ def simple_evaluate(
                 num_fewshot=num_fewshot,
                 description_dict=description_dict,
                 save_importance_path=save_importance_path,
+                method=method,
             )    
 
     return results
@@ -124,6 +126,7 @@ def head_importance(
     num_fewshot=0,
     description_dict=None,
     save_importance_path=None,
+    method="original"
 ):
     '''
         Docstring
@@ -137,7 +140,10 @@ def head_importance(
 
         tokenizer = lm.get_tokenizer()
         dataloader = task.get_dataloader(tokenizer, split, subset_size = 2500, batch_size = lm.batch_size, num_fewshot = num_fewshot)
-        result = lm.calculate_importance(dataloader)        
+        
+        # print("At headimp calc")
+        # import pdb; pdb.set_trace()
+        result = lm.calculate_importance(dataloader, method)        
         os.makedirs(os.path.dirname(save_importance_path), exist_ok = True)
         with open(save_importance_path, 'wb') as handle:
             pickle.dump(result, handle)

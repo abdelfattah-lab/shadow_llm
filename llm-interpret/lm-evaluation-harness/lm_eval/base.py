@@ -110,7 +110,7 @@ class LM(abc.ABC):
         pass
 
     @abstractmethod
-    def calculate_importance(self, dataloader):
+    def calculate_importance(self, dataloader, method="original"):
         '''
             Docstring
         '''
@@ -187,7 +187,7 @@ class BaseLM(LM):
             l.append(batch_max_length)
         return l
             
-    def calculate_importance(self, dataloader):
+    def calculate_importance(self, dataloader, method="original"):
         num_hidden_layers = self.opt.config.num_hidden_layers
         num_heads = self.opt.config.num_attention_heads
         tot_tokens, eff_tokens = 0, 0
@@ -212,11 +212,22 @@ class BaseLM(LM):
                 attn_x = self_attention.context_layer_val
                 grad_attn_x = self_attention.context_layer_val_grad
                 dim = attn_x.shape[-1]
-                attn_x, grad_attn_x = map(lambda x: rearrange(x, 'b l (h d) -> b h l d', h=num_heads, d=dim//num_heads), (attn_x, grad_attn_x)) # shape = bs, num_heads, seq_len, dim_per_head
-                dot = torch.einsum("bhli,bhli->bhl", [grad_attn_x, attn_x]).to('cpu') # not all layers are on the same device hence make sure dot is on the self.device
-                importance_score[layer] += dot.abs().sum(-1).sum(0).detach()
+                if method == "original":
+                    attn_x, grad_attn_x = map(lambda x: rearrange(x, 'b l (h d) -> b h l d', h=num_heads, d=dim//num_heads), (attn_x, grad_attn_x)) # shape = bs, num_heads, seq_len, dim_per_head
+                    dot = torch.einsum("bhli,bhli->bhl", [grad_attn_x, attn_x]).to('cpu') # not all layers are on the same device hence make sure dot is on the self.device
+                    importance_score[layer] += dot.abs().sum(-1).sum(0).detach()
+                elif method == "headmagn":
+                    attn_x, grad_attn_x = map(lambda x: rearrange(x, 'b l (h d) -> b h l d', h=num_heads, d=dim//num_heads), (attn_x, grad_attn_x)) # shape = bs, num_heads, seq_len, dim_per_head
+                    # Here, we reduce over the 'i' dimension to get the importance score for each head
+                    dot = torch.einsum("bhli,bhli->bhl", [attn_x, attn_x]).to('cpu') # not all layers are on the same device hence make sure dot is on the self.device
+                    magnmap = dot.abs().sum(-1).sum(0).detach()
+                    importance_score[layer] += magnmap.detach().to("cpu")
+                else:
+                    raise ValueError("Invalid method")
             ## helps in reducing the memory footprint
             self.opt.zero_grad()
+            # print("At headimp calc")
+            # import pdb; pdb.set_trace()
             del attn_x, grad_attn_x, dot, ll
             # self.ds_engine.module.zero_grad()
             for param in self.opt.parameters():

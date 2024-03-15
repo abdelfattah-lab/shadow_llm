@@ -214,6 +214,7 @@ class BaseLM(LM):
                 dim = attn_x.shape[-1]
                 attn_x, grad_attn_x = map(lambda x: rearrange(x, 'b l (h d) -> b h l d', h=num_heads, d=dim//num_heads), (attn_x, grad_attn_x)) # shape = bs, num_heads, seq_len, dim_per_head
                 dot = torch.einsum("bhli,bhli->bhl", [grad_attn_x, attn_x]).to('cpu') # not all layers are on the same device hence make sure dot is on the self.device
+
                 importance_score[layer] += dot.abs().sum(-1).sum(0).detach()
             ## helps in reducing the memory footprint
             self.opt.zero_grad()

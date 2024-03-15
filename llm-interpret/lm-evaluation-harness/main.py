@@ -34,6 +34,7 @@ def parse_args():
     parser.add_argument("--num_fewshot", type=int, default=0)
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--method", type=str, default="original")
     parser.add_argument("--output_path", default=None)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--no_cache", action="store_true")
@@ -93,7 +94,8 @@ def main():
         check_integrity=args.check_integrity,
         head_importance_calc=args.head_importance_calc,
         save_importance_path=args.save_importance_path,
-    )
+        method=args.method
+        )
     
     # if args.local_rank == 0:
     if not args.head_importance_calc:
