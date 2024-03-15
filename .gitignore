@@ -1,6 +1,8 @@
 
 *.pth
 *.pt
+*_tokenizer/
+*_checkpoints/
 
 
 # Byte-compiled / optimized / DLL files

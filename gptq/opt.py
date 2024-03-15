@@ -221,6 +221,15 @@ def opt_eval(model, testenc, dev, gen_train_headmaps=False, dataset="ptb"):
                 headacts[headacts < torch.quantile(headacts.float(), args.sparse_percentile)] = 0
                 headacts[headacts != 0] = 1
                 acts_ = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, output_attentions=True, headmask=headacts)
+            if args.oracle_gradsparsify:
+                self_attention = layer.self_attn
+                attn_x = self_attention.context_layer_val
+                import pdb;pdb.set_trace()
+                grad_attn_x = self_attention.context_layer_val_grad
+                dim = attn_x.shape[-1]
+                attn_x, grad_attn_x = map(lambda x: rearrange(x, 'b l (h d) -> b h l d', h=num_heads, d=dim//num_heads), (attn_x, grad_attn_x)) # shape = bs, num_heads, seq_len, dim_per_head
+                # dot = torch.einsum("bhli,bhli->bhl", [grad_attn_x, attn_x]).to('cpu') # not all layers are on the same device hence make sure dot is on the self.device
+
             # convert to 1 and 0, threshold at 70% of magnitude
             # get 60th percentile activation
             # get thresholds for headacts
@@ -228,6 +237,8 @@ def opt_eval(model, testenc, dev, gen_train_headmaps=False, dataset="ptb"):
             outs[j] = acts_[0]
         layers[i] = layer.cpu()
         del layer
+        del attn_x, grad_attn_x, dot, ll
+
         torch.cuda.empty_cache()
         inps, outs = outs, inps
 
@@ -441,6 +452,10 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--oracle_sparsify', action='store_true',
+        help='Whether to use oracle head information for head pruning.'
+    )
+    parser.add_argument(
+        '--oracle_gradsparsify', action='store_true',
         help='Whether to use oracle head information for head pruning.'
     )
     parser.add_argument(

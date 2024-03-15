@@ -291,6 +291,14 @@ class OPTAttention(nn.Module):
         # partitioned aross GPUs when using tensor-parallelism.
         attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
 
+        self.context_layer_val = attn_output
+
+        def save_grad(x):
+            self.context_layer_val_grad = x
+
+        if self.context_layer_val.requires_grad:
+            self.context_layer_val.register_hook(save_grad)
+            
         attn_output = self.out_proj(attn_output)
 
         return attn_output, attn_weights_reshaped, past_key_value
