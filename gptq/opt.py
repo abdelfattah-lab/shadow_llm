@@ -213,9 +213,11 @@ def opt_eval(model, testenc, dev, gen_train_headmaps=False, dataset="ptb"):
                 headactmap = acts_[1]
                 shardshape = (headactmap.shape[0], headactmap.shape[1], args.shardfactor, headactmap.shape[2] // args.shardfactor, headactmap.shape[3])
                 headactmap = headactmap.view(shardshape).squeeze()
+                if args.shardfactor == 1:
+                    headactmap = headactmap.unsqueeze(1)
                 # TODO(Ahmed): This equation likely needs fixing.
-                # headacts = headactmap.abs().mean(dim=2).max(dim=2)[0].detach()
-                headacts = headactmap.abs().max(dim=2)[0].max(dim=2)[0].detach()
+                headacts = headactmap.abs().mean(dim=2).max(dim=2)[0].detach()
+                # headacts = headactmap.abs().max(dim=2)[0].max(dim=2)[0].detach()
                 headacts[headacts < torch.quantile(headacts.float(), args.sparse_percentile)] = 0
                 headacts[headacts != 0] = 1
                 acts_ = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, output_attentions=True, headmask=headacts)

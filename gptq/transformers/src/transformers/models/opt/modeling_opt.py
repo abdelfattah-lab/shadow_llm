@@ -261,6 +261,11 @@ class OPTAttention(nn.Module):
             attn_weights_reshaped = None
 
         attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+        if headmask is not None:
+            cache_shape = attn_probs.shape
+            attn_probs = attn_probs.view(bsz, self.num_heads, headmask.shape[1], tgt_len//headmask.shape[1], src_len)
+            attn_probs = attn_probs * headmask.view(1, headmask.shape[0], headmask.shape[1], 1, 1)
+            attn_probs = attn_probs.view(cache_shape)
         attn_output = torch.bmm(attn_probs, value_states)
 
         if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
@@ -269,19 +274,19 @@ class OPTAttention(nn.Module):
                 f" {attn_output.size()}"
             )
 
-        if headmask is not None:
-            cache_shape = attn_output.shape
-            attn_output = attn_output.view(bsz, self.num_heads, headmask.shape[1], tgt_len//headmask.shape[1], self.head_dim)
-            # Now, attn_output is of shape (B, H, P, L/P, Q)
-            # headmask is of shape (H, P)
-            # wherever headmask[h,p] == 0, we want to make those attn_output[h,p] == 0
-            attn_output = attn_output * headmask.view(1, headmask.shape[0], headmask.shape[1], 1, 1)
-            attn_output = attn_output.view(cache_shape)
-            # import pdb; pdb.set_trace()
-        else:
-            attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
+        # if headmask is not None:
+        #     cache_shape = attn_output.shape
+        #     import pdb; pdb.set_trace()
+        #     attn_output = attn_output.view(bsz, self.num_heads, headmask.shape[1], tgt_len//headmask.shape[1], self.head_dim)
+        #     # Now, attn_output is of shape (B, H, P, L/P, Q)
+        #     # headmask is of shape (H, P)
+        #     # wherever headmask[h,p] == 0, we want to make those attn_output[h,p] == 0
+        #     attn_output = attn_output * headmask.view(1, headmask.shape[0], headmask.shape[1], 1, 1)
+        #     attn_output = attn_output.view(cache_shape)
+        #     # import pdb; pdb.set_trace()
+        # else:
+        attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
         attn_output = attn_output.transpose(1, 2)
-
         # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
         # partitioned aross GPUs when using tensor-parallelism.
         attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
