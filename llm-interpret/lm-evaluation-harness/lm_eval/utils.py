@@ -221,6 +221,14 @@ def get_dataloader_from_dataset(dataset, subset_size = None, batch_size = 1):
     sampler = RandomSampler(dataset)
     return DataLoader(dataset, sampler=sampler,batch_size=batch_size)
 
+# def get_dataloader_from_dataset(dataset, subset_size=None, batch_size=1):
+    
+#     if subset_size and subset_size < len(dataset):
+#         dataset = torch.utils.data.Subset(dataset, list(range(subset_size)))
+    
+#     # No sampler specified, which defaults to sequential behavior.
+#     return torch.utils.data.DataLoader(dataset, batch_size=batch_size)
+
 def create_dataloader(tokenizer, docs, fewshot_context, doc_to_cont, subset_size = None, batch_size = 1, num_fewshot = 0):
 
     class NewDataset(Dataset):

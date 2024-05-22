@@ -4,9 +4,51 @@ import os
 import random
 import pickle
 from lm_eval.base import BaseLM
+import torch.nn as nn
+import numpy as np
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+from torch.nn.utils.rnn import pad_sequence
+
 # from transformers.deepspeed import HfDeepSpeedConfig
 # import deepspeed
 
+class SequenceModel(nn.Module):
+    def __init__(self, embedding_dim=1024, output_dim=16):
+        super(SequenceModel, self).__init__()
+        
+        # Self-attention layer
+        self.self_attention = nn.MultiheadAttention(embed_dim=embedding_dim, num_heads=1, batch_first=True)
+        
+        # 2-layer MLP
+        self.fc1 = nn.Linear(embedding_dim, embedding_dim//2)
+        self.fc2 = nn.Linear(embedding_dim//2, output_dim)
+    
+    def generate_attention_mask(self, input_seq):
+        # Assuming padding value is 0, create a mask for non-padded values
+        # input_seq shape is assumed to be [B, L, E]
+        mask = input_seq.ne(0).any(dim=2)  # Resulting shape [B, L]
+        # Inverting the mask for attention: True for positions to attend, False for positions to ignore
+        mask = ~mask  # Now mask is True where values should be ignored
+        # No need to multiply by -1e9 here; we'll use this boolean mask directly
+        return mask
+
+    def forward(self, x):
+        # Self-attention: [L, E] -> [L, L, E]
+        attention_mask = self.generate_attention_mask(x)
+        
+        # Apply self-attention
+        x, _ = self.self_attention(x, x, x, key_padding_mask=attention_mask)
+
+        # Aggregating to [1, E]
+        x = x.mean(dim=1, keepdim=True)
+        
+        # Passing through 2-layer MLP
+        x = F.relu(self.fc1(x.squeeze(1)))
+        x = self.fc2(x)
+        
+        return x
+        
 class HFLM(BaseLM):
     def __init__(
         self,
@@ -26,6 +68,8 @@ class HFLM(BaseLM):
         head_importance_path=None,
         fc_percent_mask=0,
         fc_importance_path=None,
+        maskmethod="original",
+        predictor_="piqa"
     ):
         super().__init__()
 
@@ -101,7 +145,7 @@ class HFLM(BaseLM):
         num_heads = self.opt.config.num_attention_heads
         self.head_mask = torch.ones(num_hidden_layers * num_heads, dtype = torch.half)
         self.fc_mask = torch.ones(num_hidden_layers, dtype = torch.half)
-
+        self.head_percent_mask = head_percent_mask
         if int(mask_heads):
             with open(head_importance_path, 'rb') as f:
                 importance = pickle.load(f)
@@ -121,6 +165,18 @@ class HFLM(BaseLM):
                 fc_indices = list(pickle.load(f))
             fc_indices = fc_indices[: int(fc_percent_mask) * len(fc_indices) // 100] 
             self.fc_mask[fc_indices] = 0.
+        self.maskmethod = maskmethod
+        # if self.maskmethod == "shadowllm":
+        self.headpredictor_dict = {}
+        if self.maskmethod != "original":
+        # load all predictors from model_opt1.3b for each layer as model_layer_{layer_idx}.pt
+            for layer in range(num_hidden_layers):
+                predm_ = SequenceModel(embedding_dim=2048 , output_dim=num_heads)
+                predm_.load_state_dict(torch.load(f'./model_opt1.3b_{predictor_}/model_layer_{layer}.pt'))
+                predm_ = predm_.to(self._device)
+                self.headpredictor_dict[layer] = predm_
+        self.tokenencoder = self.opt.model.decoder.embed_tokens
+        self._temp_tracker = 0
 
 
     @property
@@ -164,8 +220,42 @@ class HFLM(BaseLM):
         """
 
         if labels == None:
+            # we take inps; feed it to our predictor for each layer, modify head_mask to be a per-item dict
+            # modify opt forward pass to use the headmask corresponding to the item
             with torch.no_grad():
-                return self.opt(input_ids = inps, head_mask = self.head_mask, fc_mask = self.fc_mask)[0][:, :, :50265]
+                if self.maskmethod == "original":
+                    self.newmask = self.head_mask
+                    # # import pdb; pdb.set_trace()
+                    # curr_dindex = self._temp_tracker // 2
+                    # # Use the curr_dindex to index the self.headact_trace to get per-token head-layer mask
+                    # self.newmask = self.headact_trace[self._temp_tracker][1]
+                    # # normalize masks
+                    # _, head_indices = torch.sort(self.newmask.view(-1))
+                    # head_indices = list(head_indices.numpy())
+                    # head_indices = head_indices[: int(self.head_percent_mask) * len(head_indices) // 100]
+                    # self.newmask = torch.ones_like(self.newmask).view(-1)
+                    # self.newmask[head_indices] = 0.
+                    # self.newmask = self.newmask.view(self.head_mask.shape[0], self.head_mask.shape[1]).contiguous().half()
+                elif self.maskmethod == "predictor":
+                    self.newmask = torch.zeros_like(self.head_mask)
+                    enc_inp = self.tokenencoder(inps)
+                    for layer_ in range(self.head_mask.shape[0]):
+                        self.newmask[layer_] = self.headpredictor_dict[layer_](enc_inp.float()).squeeze()
+                    # normalize masks
+                    _, head_indices = torch.sort(self.newmask.view(-1))
+                    head_indices = list(head_indices.numpy())
+                    head_indices = head_indices[: int(self.head_percent_mask) * len(head_indices) // 100]
+                    self.newmask = torch.ones_like(self.newmask).view(-1)
+                    self.newmask[head_indices] = 0.
+                    self.newmask = self.newmask.view(self.head_mask.shape[0], self.head_mask.shape[1]).contiguous()
+                elif self.maskmethod == "kmeans":
+                    raise NotImplementedError
+                else:
+                    raise ValueError("Invalid maskmethod")
+                # import pdb; pdb.set_trace()
+                self._temp_tracker += 1
+                # import pdb; pdb.set_trace()
+                return self.opt(input_ids = inps, head_mask = self.newmask, fc_mask = self.fc_mask)[0][:, :, :50265]
                 # rank = int(os.getenv("LOCAL_RANK", "0"))
                 # return self.ds_engine.module(input_ids = inps, head_mask = self.head_mask.to(rank))[0][:, :, :50265]
         else:

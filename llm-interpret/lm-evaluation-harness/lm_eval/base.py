@@ -9,6 +9,7 @@ import hashlib
 import datasets
 from sqlitedict import SqliteDict
 from tqdm import tqdm
+import torch.nn as nn
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
@@ -19,6 +20,47 @@ from einops import rearrange
 from tqdm import tqdm
 from collections import defaultdict
 import pickle
+import optuna
+from functools import partial
+
+
+from deap import base, creator, tools, algorithms
+import random
+from deap import tools
+
+class SequenceModel(nn.Module):
+    def __init__(self, embedding_dim=1024, output_dim=16):
+        super(SequenceModel, self).__init__()
+        
+        # Self-attention layer
+        self.self_attention = nn.MultiheadAttention(embed_dim=embedding_dim, num_heads=1, batch_first=True)
+        
+        # 2-layer MLP
+        self.fc1 = nn.Linear(embedding_dim, embedding_dim//4)
+        self.fc2 = nn.Linear(embedding_dim//4, output_dim)
+    
+    def generate_attention_mask(self, input_seq):
+        # Assuming padding value is 0, create a mask for non-padded values
+        mask = input_seq.ne(0).float()
+        # Expand mask for the attention heads
+        mask = mask.unsqueeze(1).unsqueeze(1)
+        # Convert to boolean (optional, depending on the PyTorch version)
+        return mask.bool() if hasattr(mask, 'bool') else mask
+
+    def forward(self, x):
+        # Self-attention: [L, E] -> [L, L, E]
+        # x, _ = self.self_attention(x, x, x)
+        # attention_mask = self.generate_attention_mask(x)
+        x, _ = self.self_attention(x, x, x)
+
+        # Aggregating to [1, E]
+        x = x.mean(dim=1, keepdim=True)
+        
+        # Passing through 2-layer MLP
+        x = F.relu(self.fc1(x.squeeze(1)))
+        x = self.fc2(x)
+        
+        return x
 
 class LM(abc.ABC):
     def __init__(self):
@@ -185,17 +227,393 @@ class BaseLM(LM):
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             batch_max_length = torch.max(l_ctx + l_cont).item()
             l.append(batch_max_length)
-        return l
-            
-    def calculate_importance(self, dataloader, method="original"):
+        return l    
+
+
+    def calculate_oracle_ga(self, dataloader, method="NA", task="NA", num_fewshot=0):
+        num_hidden_layers = self.opt.config.num_hidden_layers
+        num_heads = self.opt.config.num_attention_heads
+        device = self.device
+
+        # Helper functions to apply and revert head mask
+        def apply_head_mask(attention_module, head_mask):
+            if not hasattr(attention_module, 'original_forward'):
+                attention_module.original_forward = attention_module.forward
+
+            def forward_with_head_mask(*args, **kwargs):
+                output = attention_module.original_forward(*args, **kwargs)
+                attn_output, attn_weights_reshaped, past_key_value = output
+
+                if attn_weights_reshaped is not None:
+                    head_mask_expanded = head_mask.view(1, -1, 1, 1)
+                    attn_weights_reshaped = attn_weights_reshaped * head_mask_expanded
+
+                return attn_output, attn_weights_reshaped, past_key_value
+
+            attention_module.forward = forward_with_head_mask
+
+        def revert_head_mask(attention_module):
+            if hasattr(attention_module, 'original_forward'):
+                attention_module.forward = attention_module.original_forward
+                del attention_module.original_forward
+
+        # Define the fitness function
+        def evaluate(individual):
+            model = self.opt.model
+            head_mask = torch.tensor(individual, dtype=torch.float32).view(num_hidden_layers, num_heads)
+
+            for layer in range(num_hidden_layers):
+                self_attention = model.get_decoder().layers[layer].self_attn
+                apply_head_mask(self_attention, head_mask[layer])
+
+            model.eval()
+            total_loss = 0
+            izjns = 0
+
+            for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
+                izjns += 1
+                if izjns > 200:
+                    break
+                batch_max_length = torch.max(l_ctx + l_cont).item()
+                inp = inp[:, :batch_max_length]
+                attn_mask = torch.ones((len(l_ctx), batch_max_length), dtype=torch.long)
+                labels = torch.empty((len(l_ctx), batch_max_length), dtype=torch.long).fill_(-100.)
+                for i in range(len(l_ctx)):
+                    attn_mask[i][l_ctx[i] + l_cont[i]:] = torch.zeros(batch_max_length - (l_ctx[i] + l_cont[i]))
+                    labels[i][l_ctx[i]: l_ctx[i] + l_cont[i]] = inp[i][l_ctx[i]:l_ctx[i] + l_cont[i]]
+
+                ll = self._model_call(inp.to(device), attn_mask.to(device), labels.to(device))
+                total_loss += ll.cpu().detach().item()
+
+            for layer in range(num_hidden_layers):
+                self_attention = model.get_decoder().layers[layer].self_attn
+                revert_head_mask(self_attention)
+
+            return (total_loss,)
+
+        for sparsity_pc in [50, 60, 70, 80, 90, 92, 94, 96]:
+            sparsity_pc = sparsity_pc / 100.
+            # Set up the GA
+            hof = tools.HallOfFame(10)
+            creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
+            creator.create("Individual", list, fitness=creator.FitnessMin)
+            def init_individual(icls, size, sparsity):
+                """Initialize the individual with a fixed number of 1's according to the sparsity."""
+                total_ones = int((1 - sparsity) * size)  # Total number of ones
+                individual = [1] * total_ones + [0] * (size - total_ones)
+                random.shuffle(individual)
+                return icls(individual)
+            toolbox = base.Toolbox()
+            toolbox.register("attr_bool", random.randint, 0, 1)
+            toolbox.register("individual", init_individual, creator.Individual, 
+                            size=num_hidden_layers * num_heads, sparsity=sparsity_pc)
+            toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+            toolbox.register("evaluate", evaluate)
+
+            def repair(individual, size, sparsity):
+                """Repair the individual to maintain the desired sparsity level."""
+                total_ones = int((1 - sparsity) * size)
+                num_ones = sum(individual)
+                
+                # Add or remove 1's to meet the desired sparsity
+                while num_ones > total_ones:
+                    idx = random.choice([i for i, x in enumerate(individual) if x == 1])
+                    individual[idx] = 0
+                    num_ones -= 1
+                while num_ones < total_ones:
+                    idx = random.choice([i for i, x in enumerate(individual) if x == 0])
+                    individual[idx] = 1
+                    num_ones += 1
+                return individual
+
+            def crossover(ind1, ind2, sparsity):
+                """Perform a crossover that maintains sparsity."""
+                size = len(ind1)
+                cxpoint = random.randint(1, size - 1)
+                temp1 = ind1[:cxpoint] + ind2[cxpoint:]
+                temp2 = ind2[:cxpoint] + ind1[cxpoint:]
+                repair(temp1, size, sparsity)
+                repair(temp2, size, sparsity)
+                ind1[:] = temp1
+                ind2[:] = temp2
+                return ind1, ind2
+
+            def mutate(individual, indpb, sparsity):
+                """Mutate an individual by flipping a bit with probability indpb."""
+                for i in range(len(individual)):
+                    if random.random() < indpb:
+                        individual[i] = type(individual[i])(not individual[i])
+                repair(individual, len(individual), sparsity)
+                return individual,
+
+            toolbox.register("mate", crossover, sparsity=sparsity_pc)
+            toolbox.register("mutate", mutate, indpb=0.05, sparsity=sparsity_pc)
+
+            # total_elements = num_hidden_layers * num_heads
+            # repair_function = partial(repair, size=total_elements, sparsity=sparsity_pc / 100.0)
+
+            # # Register the repair function to be applied after mutation and crossover
+            # toolbox.decorate("mutate", repair_function)
+            # toolbox.decorate("mate", repair_function)
+            toolbox.register("select", tools.selTournament, tournsize=3)
+
+            population = toolbox.population(n=20)
+            # open zcps/opt-1.3b/l2_norm_piqa_0.pkl 
+            with open('zcps/opt-1.3b/nwot_piqa_0.pkl', 'rb') as f: importance_score = pickle.load(f)
+            prob_dist_mask = torch.functional.F.softmax(importance_score.detach().cpu().flatten())
+            for ind in population:
+                # sample a random mask based on the prob_dist_mask
+                for i in range(len(ind)):
+                    ind[i] = 1 if random.random() < prob_dist_mask[i] else 0
+                # ensure ind is repaired
+                ind = repair(ind, len(ind), sparsity_pc)
+            # Configure statistics and logbook
+            stats = tools.Statistics(lambda ind: ind.fitness.values)
+            stats.register("avg", np.mean)
+            stats.register("std", np.std)
+            stats.register("min", np.min)
+            stats.register("max", np.max)
+            stats.register("cum_min", lambda pop: min(ind.fitness.values[0] for ind in pop + hof.items))
+
+
+            logbook = tools.Logbook()
+            logbook.header = "gen", "evals", "avg", "std", "min", "max", "cum_min"
+
+            # Run the genetic algorithm
+            population, logbook = algorithms.eaSimple(population, toolbox, cxpb=0.5, mutpb=0.2, ngen=100,
+                                                    stats=stats, halloffame=hof, verbose=True)
+
+            best_ind = tools.selBest(population, 1)[0]
+            print('Best individual is %s, %s' % (best_ind, best_ind.fitness.values))
+            if not os.path.exists('zcps'):
+                os.makedirs('zcps')
+            model_name = self.opt.config._name_or_path.replace("facebook/", "")
+            base_path = f'zcps/{model_name}'
+            if not os.path.exists(base_path):
+                os.makedirs(base_path)
+
+            for i, individual in enumerate(hof):
+                head_mask = torch.tensor(individual, dtype=torch.float32).view(num_hidden_layers, num_heads)
+                importance_score = torch.zeros(num_hidden_layers, num_heads)
+                
+                for layer in range(num_hidden_layers):
+                    for head in range(num_heads):
+                        importance_score[layer, head] = head_mask[layer, head]
+
+                with open(os.path.join(base_path, f'oracle_ga_top_{i+1}_{sparsity_pc}_{task.DATASET_PATH}_{num_fewshot}.pkl'), 'wb') as f:
+                    pickle.dump(importance_score, f)
+        return best_ind
+
+    def calculate_oracle(self, dataloader, method="NA", task="NA", num_fewshot=0):
+        def apply_head_mask(attention_module, head_mask):
+            if not hasattr(attention_module, 'original_forward'):
+                attention_module.original_forward = attention_module.forward
+
+            def forward_with_head_mask(*args, **kwargs):
+                output = attention_module.original_forward(*args, **kwargs)
+                attn_output, attn_weights_reshaped, past_key_value = output
+
+                if attn_weights_reshaped is not None:
+                    head_mask_expanded = head_mask.view(1, -1, 1, 1)
+                    attn_weights_reshaped = attn_weights_reshaped * head_mask_expanded
+
+                return attn_output, attn_weights_reshaped, past_key_value
+
+            attention_module.forward = forward_with_head_mask
+
+
+        def revert_head_mask(attention_module):
+            if hasattr(attention_module, 'original_forward'):
+                attention_module.forward = attention_module.original_forward
+                del attention_module.original_forward
+
+        def objective(trial, model, dataloader, num_hidden_layers, num_heads, device, sparsity_pc):
+            # Define binary mask as a trial parameter
+            # binary_mask_flat = [trial.suggest_int(f'layer_{i}_head_{j}', 0, 1) for i in range(num_hidden_layers) for j in range(num_heads)]
+            numc = int((sparsity_pc/100.)*num_hidden_layers*num_heads)
+            binary_mask_ids = [trial.suggest_int(f'choice_{i}', 0, num_hidden_layers*num_heads-1) for i in range(numc)]
+            # Make those indices 1
+            binary_mask_flat = [1 if i in binary_mask_ids else 0 for i in range(num_hidden_layers*num_heads)]
+            head_mask = torch.tensor(binary_mask_flat).view(num_hidden_layers, num_heads).float()
+
+            for layer in range(num_hidden_layers):
+                self_attention = model.get_decoder().layers[layer].self_attn
+                apply_head_mask(self_attention, head_mask[layer])
+            model.eval()
+            total_loss = 0
+            izjns = 0
+
+            for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
+                izjns += 1
+                if izjns > 200:
+                    break
+                batch_max_length = torch.max(l_ctx + l_cont).item()
+                inp = inp[:, :batch_max_length]
+                attn_mask = torch.ones((len(l_ctx), batch_max_length), dtype=torch.long)
+                labels = torch.empty((len(l_ctx), batch_max_length), dtype=torch.long).fill_(-100.)
+                for i in range(len(l_ctx)):
+                    attn_mask[i][l_ctx[i] + l_cont[i]:] = torch.zeros(batch_max_length - (l_ctx[i] + l_cont[i]))
+                    labels[i][l_ctx[i]: l_ctx[i] + l_cont[i]] = inp[i][l_ctx[i]:l_ctx[i] + l_cont[i]]
+
+                ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
+                total_loss += ll.cpu().detach().item()
+
+            for layer in range(num_hidden_layers):
+                self_attention = model.get_decoder().layers[layer].self_attn
+                revert_head_mask(self_attention)
+
+            return total_loss
+    
+        num_hidden_layers = self.opt.config.num_hidden_layers
+        num_heads = self.opt.config.num_attention_heads
+        device = self.device
+        for sparsity_pc in [50, 60, 70, 80, 90, 92, 94, 96]:
+            study = optuna.create_study(direction="minimize")
+            study.optimize(lambda trial: objective(trial, self.opt, dataloader, num_hidden_layers, num_heads, device, sparsity_pc), n_trials=500)
+
+            best_trial = study.best_trial
+            best_mask_flat = [best_trial.params[f'layer_{i}_head_{j}'] for i in range(num_hidden_layers) for j in range(num_heads)]
+            best_mask = torch.tensor(best_mask_flat).view(num_hidden_layers, num_heads).float()
+
+            importance_score = torch.zeros(num_hidden_layers, num_heads)
+            for i in range(num_hidden_layers):
+                for j in range(num_heads):
+                    importance_score[i, j] = best_mask[i, j]
+
+            model_name = self.opt.config._name_or_path.replace("facebook/", "")
+            if not os.path.exists('zcps'):
+                os.makedirs('zcps')
+            base_path = f'zcps/{model_name}'
+            if not os.path.exists(base_path):
+                os.makedirs(base_path)
+
+            with open(base_path + f'/oracle_{sparsity_pc}_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+                pickle.dump(importance_score, f)
+
+        return importance_score
+
+    def calculate_snip(self, dataloader, method="NA", task="NA", num_fewshot=0):
         num_hidden_layers = self.opt.config.num_hidden_layers
         num_heads = self.opt.config.num_attention_heads
         tot_tokens, eff_tokens = 0, 0
-        importance_score = torch.zeros(num_hidden_layers, num_heads).to('cpu')
-        ## disable dropout
+        
+        fc1_neurons = self.opt.get_decoder().layers[0].fc1.out_features
+        fc2_neurons = self.opt.get_decoder().layers[0].fc2.out_features
         self.opt.eval()
+        importance_score = torch.zeros(num_hidden_layers, num_heads)
+        
+        fc1_importance_score = torch.zeros(num_hidden_layers, fc1_neurons)
+        fc2_importance_score = torch.zeros(num_hidden_layers, fc2_neurons)
+        perlayer_class_jacobians = {"l_{}".format(i): {"h_{}".format(h): defaultdict(list) for h in range(num_heads)} for i in range(num_hidden_layers)}
+        izjns = 0
+        def apply_mask(module, input, output):
+            masked_outputs = []
+            mask = module.mask  # Ensure mask is [1, num_heads, 1, 1] to broadcast correctly
+            for head_output in output[2]:
+                masked_output = head_output * mask
+                masked_outputs.append(masked_output)
+            return (output[0], output[1], tuple(masked_outputs))
+
+        def apply_fc_mask(module, input, output):
+            return module.mask * output
+
+        def capture_gradients(module, grad_input, grad_output):
+            module.stored_gradients = grad_output[0]
+
+        def attach_hooks(model, num_heads):
+            for name, module in model.named_modules():
+                if module.__class__.__name__ == "OPTAttention":
+                    module.mask = torch.ones(1, num_heads, 1, 1, requires_grad=True, dtype=torch.float16).to(self.device)
+                    module.register_forward_hook(apply_mask)
+                    module.register_backward_hook(capture_gradients)
+        
+        
+        def attach_fc1_hooks(model, fc1_neurons):
+            for name, module in model.named_modules():
+                if "fc1" in name:
+                    module.mask = torch.ones(1, fc1_neurons, requires_grad=True, dtype=torch.float16).to(self.device)
+                    module.register_forward_hook(apply_fc_mask)
+                    module.register_backward_hook(capture_gradients)
+        
+        def attach_fc2_hooks(model, fc2_neurons):
+            for name, module in model.named_modules():
+                if "fc2" in name:
+                    module.mask = torch.ones(1, fc2_neurons, requires_grad=True, dtype=torch.float16).to(self.device)
+                    module.register_forward_hook(apply_fc_mask)
+                    module.register_backward_hook(capture_gradients)
+
+        attach_hooks(self.opt, num_heads)
+        attach_fc1_hooks(self.opt, fc1_neurons)
+        attach_fc2_hooks(self.opt, fc2_neurons)
+        
 
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
+            izjns += 1
+            if izjns > 500:
+                break
+            batch_max_length = torch.max(l_ctx + l_cont).item()
+            inp = inp[:, :batch_max_length]
+            attn_mask = torch.ones((len(l_ctx), batch_max_length), dtype=torch.long)
+            labels = torch.empty((len(l_ctx), batch_max_length), dtype=torch.long).fill_(-100.)
+            for i in range(len(l_ctx)):
+                attn_mask[i][l_ctx[i]+l_cont[i]:] = torch.zeros(batch_max_length - (l_ctx[i]+l_cont[i]))
+                labels[i][l_ctx[i]: l_ctx[i] + l_cont[i]] = inp[i][l_ctx[i]:l_ctx[i]+l_cont[i]]
+                tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
+                eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
+            ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
+            ll.backward()
+            for layer in range(num_hidden_layers):
+                self_attention = self.opt.get_decoder().layers[layer].self_attn
+                fc1_layer = self.opt.get_decoder().layers[layer].fc1
+                fc2_layer = self.opt.get_decoder().layers[layer].fc2
+                mask_gradient = self_attention.stored_gradients
+                fc1_mask_gradient = fc1_layer.stored_gradients
+                fc2_mask_gradient = fc2_layer.stored_gradients
+                mask_gradient = rearrange(mask_gradient, 'b l (h d) -> b l h d', h=num_heads)
+                snip_info = torch.sum(torch.abs(mask_gradient), dim=1).sum(dim=-1).squeeze()
+                snip_fc1_info = torch.sum(torch.abs(fc1_mask_gradient), dim=0).squeeze()
+                snip_fc2_info = torch.sum(torch.abs(fc2_mask_gradient), dim=0).squeeze()
+                # snip_info = torch.einsum("bhli,bhli->bhl", [grad_attn_x, attn_x]).to('cpu') # not all layers are on the same device hence make sure dot is on the self.device
+                importance_score[layer] += snip_info.detach().cpu()
+                fc1_importance_score[layer] += snip_fc1_info.detach().cpu()
+                fc2_importance_score[layer] += snip_fc2_info.detach().cpu()
+            ## helps in reducing the memory footprint
+            self.opt.zero_grad()
+            del ll            
+            for param in self.opt.parameters():
+                param.grad = None
+        # Save it as 'epenas' + task.DATASET_PATH + str(num_fewshot) + '.pkl' in a new directory called 'zcps/' + self.opt.config._name_or_path.replace("facebook/", "") + "/"
+        model_name = self.opt.config._name_or_path.replace("facebook/", "")
+        if not os.path.exists(f'zcps'):
+            os.makedirs(f'zcps')
+        base_path = f'zcps/{model_name}'
+        # ensure base_path exists?
+        if not os.path.exists(base_path):
+            os.makedirs(base_path)
+        with open(base_path + f'/snip_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(importance_score, f)
+        with open(base_path + f'/fc1_snip_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(fc1_importance_score, f)
+        with open(base_path + f'/fc2_snip_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(fc2_importance_score, f)
+        return importance_score
+
+    def calculate_plainact(self, dataloader, method="NA", task="NA", num_fewshot=0):
+        num_hidden_layers = self.opt.config.num_hidden_layers
+        num_heads = self.opt.config.num_attention_heads
+        fc1_neurons = self.opt.get_decoder().layers[0].fc1.out_features
+        fc2_neurons = self.opt.get_decoder().layers[0].fc2.out_features
+        tot_tokens, eff_tokens = 0, 0
+        self.opt.eval()
+        importance_score = torch.zeros(num_hidden_layers, num_heads)
+        fc1_importance_score = torch.zeros(num_hidden_layers, fc1_neurons)
+        fc2_importance_score = torch.zeros(num_hidden_layers, fc2_neurons)
+        perlayer_class_jacobians = {"l_{}".format(i): {"h_{}".format(h): defaultdict(list) for h in range(num_heads)} for i in range(num_hidden_layers)}
+        izjns = 0
+        for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
+            izjns += 1
+            if izjns > 500:
+                break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
             attn_mask = torch.ones((len(l_ctx), batch_max_length), dtype=torch.long)
@@ -211,28 +629,725 @@ class BaseLM(LM):
                 self_attention = self.opt.get_decoder().layers[layer].self_attn
                 attn_x = self_attention.context_layer_val
                 grad_attn_x = self_attention.context_layer_val_grad
+                fc1_weight = self.opt.get_decoder().layers[layer].fc1.weight
+                fc2_weight = self.opt.get_decoder().layers[layer].fc2.weight
+                fc1_weight_grad = self.opt.get_decoder().layers[layer].fc1.weight.grad
+                fc2_weight_grad = self.opt.get_decoder().layers[layer].fc2.weight.grad
+
                 dim = attn_x.shape[-1]
-                if method == "original":
+                attn_x, grad_attn_x = map(lambda x: rearrange(x, 'b l (h d) -> b h l d', h=num_heads, d=dim//num_heads), (attn_x, grad_attn_x)) # shape = bs, num_heads, seq_len, dim_per_head
+                plainact_info = torch.einsum("bhli,bhli->bhl", [grad_attn_x, attn_x]).to('cpu') # not all layers are on the same device hence make sure dot is on the self.device
+                importance_score[layer] += plainact_info.abs().sum(-1).sum(0).detach()
+                plainact_f1info = fc1_weight_grad * fc1_weight
+                fc1_importance_score[layer] += plainact_f1info.abs().sum(-1).cpu()
+                plainact_f2info = fc2_weight_grad * fc2_weight
+                fc2_importance_score[layer] += plainact_f2info.abs().sum(-1).cpu()
+            ## helps in reducing the memory footprint
+            self.opt.zero_grad()
+            del attn_x, grad_attn_x, ll
+            del fc1_weight, fc2_weight, fc1_weight_grad, fc2_weight_grad
+            for param in self.opt.parameters():
+                param.grad = None
+        # Save it as 'epenas' + task.DATASET_PATH + str(num_fewshot) + '.pkl' in a new directory called 'zcps/' + self.opt.config._name_or_path.replace("facebook/", "") + "/"
+        model_name = self.opt.config._name_or_path.replace("facebook/", "")
+        if not os.path.exists(f'zcps'):
+            os.makedirs(f'zcps')
+        base_path = f'zcps/{model_name}'
+        # ensure base_path exists?
+        if not os.path.exists(base_path):
+            os.makedirs(base_path)
+        with open(base_path + f'/plainact_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(importance_score, f)
+        with open(base_path + f'/fc1_plainact_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(fc1_importance_score, f)
+        with open(base_path + f'/fc2_plainact_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(fc2_importance_score, f)
+        return importance_score
+    
+    def calculate_nwot(self, dataloader, method="NA", task="NA", num_fewshot=0):
+        """
+        For EPE-NAS, we need to go through each item in data loader
+        For EACH layer AND HEAD, have a dictionary mapping the class to all jacobians.
+        """
+        num_hidden_layers = self.opt.config.num_hidden_layers
+        num_heads = self.opt.config.num_attention_heads
+        tot_tokens, eff_tokens = 0, 0
+        fc1_neurons = self.opt.get_decoder().layers[0].fc1.out_features
+        fc2_neurons = self.opt.get_decoder().layers[0].fc2.out_features
+        self.opt.eval()
+        importance_score = torch.zeros(num_hidden_layers, num_heads)
+        fc1_importance_score = torch.zeros(num_hidden_layers, fc1_neurons)
+        fc2_importance_score = torch.zeros(num_hidden_layers, fc2_neurons)
+        izjns = 0
+        for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
+            izjns += 1
+            if izjns > 500:
+                break
+            # if izjns > 500:
+            #     break
+            batch_max_length = torch.max(l_ctx + l_cont).item()
+            inp = inp[:, :batch_max_length]
+            attn_mask = torch.ones((len(l_ctx), batch_max_length), dtype=torch.long)
+            labels = torch.empty((len(l_ctx), batch_max_length), dtype=torch.long).fill_(-100.)
+            for i in range(len(l_ctx)):
+                attn_mask[i][l_ctx[i]+l_cont[i]:] = torch.zeros(batch_max_length - (l_ctx[i]+l_cont[i]))
+                labels[i][l_ctx[i]: l_ctx[i] + l_cont[i]] = inp[i][l_ctx[i]:l_ctx[i]+l_cont[i]]
+                tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
+                eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
+            ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
+            for layer in range(num_hidden_layers):
+                self_attention = self.opt.get_decoder().layers[layer].self_attn
+                attn_x = self_attention.context_layer_val
+                attn_x = rearrange(attn_x, 'b l (h d) -> b l h d', h=num_heads)
+                fc1_output_act = self.opt.get_decoder().layers[layer].fc1_output
+                fc2_output_act = self.opt.get_decoder().layers[layer].fc2_output
+
+                for h_ in range(num_heads):
+                    x = (attn_x > 0).float()[:, :, h_, :]
+                    x = x.reshape(x.shape[0], -1)
+                    # K = x @ x.t()  # Hamming distance
+                    K2 = (1. - x) @ (1. - x.t())
+                    K = K2.cpu().numpy()  # combine the two parts
+                    s, jc = np.linalg.slogdet(K)
+                    importance_score[layer, h_] += jc
+                fc1_x = (fc1_output_act > 0).float()
+                seqlen = fc1_x.shape[0]
+                K2_fc1 = torch.diag(torch.matmul((1. - fc1_x).t(), 1. - fc1_x))/seqlen
+                K_fc1 = K2_fc1.cpu().numpy()
+                fc2_x = (fc2_output_act > 0).float()
+                K2_fc2 = torch.diag(torch.matmul((1. - fc2_x).t(), 1. - fc2_x))/seqlen
+                K_fc2 = K2_fc2.cpu().numpy()
+                for n_ in range(fc1_neurons):
+                    K_value = K_fc1[n_]
+                    if K_value > 0:
+                        fc1_importance_score[layer, n_] += np.log(K_value)
+                    else:
+                        fc1_importance_score[layer, n_] += -np.inf
+                for n_ in range(fc2_neurons):
+                    K_value = K_fc2[n_]
+                    if K_value > 0:
+                        fc2_importance_score[layer, n_] += np.log(K_value)
+                    else:
+                        fc2_importance_score[layer, n_] += -np.inf
+
+                # for n_ in range(fc1_neurons):
+                #     x = (fc1_output_act > 0).float()[:, n_]
+                #     x = x.reshape(1, -1)
+                #     K2 = (1. - x) @ (1. - x.t())
+                #     K = K2.cpu().numpy()  # combine the two parts
+                #     s, jc = np.linalg.slogdet(K)
+                #     fc1_importance_score[layer, n_] += jc
+                # for n_ in range(fc2_neurons):
+                #     x = (fc2_output_act > 0).float()[:, n_]
+                #     x = x.reshape(1, -1)
+                #     # K = x @ x.t()
+                #     K2 = (1. - x) @ (1. - x.t())
+                #     K = K2.cpu().numpy()  # combine the two parts
+                #     s, jc = np.linalg.slogdet(K)
+                #     fc2_importance_score[layer, n_] += jc
+            ## helps in reducing the memory footprint
+            self.opt.zero_grad()
+            del attn_x, ll
+            del fc1_output_act, fc2_output_act
+            for param in self.opt.parameters():
+                param.grad = None
+        # Save it as 'epenas' + task.DATASET_PATH + str(num_fewshot) + '.pkl' in a new directory called 'zcps/' + self.opt.config._name_or_path.replace("facebook/", "") + "/"
+        model_name = self.opt.config._name_or_path.replace("facebook/", "")
+        if not os.path.exists(f'zcps'):
+            os.makedirs(f'zcps')
+        base_path = f'zcps/{model_name}'
+        # ensure base_path exists?
+        if not os.path.exists(base_path):
+            os.makedirs(base_path)
+        with open(base_path + f'/nwot_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(importance_score, f)
+        with open(base_path + f'/fc1_nwot_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(fc1_importance_score, f)
+        with open(base_path + f'/fc2_nwot_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(fc2_importance_score, f)
+        return importance_score
+
+    def calculate_l2_norm(self, dataloader, method="NA", task="NA", num_fewshot=0):
+        """
+        For EPE-NAS, we need to go through each item in data loader
+        For EACH layer AND HEAD, have a dictionary mapping the class to all jacobians.
+        """
+        num_hidden_layers = self.opt.config.num_hidden_layers
+        num_heads = self.opt.config.num_attention_heads
+        tot_tokens, eff_tokens = 0, 0
+        fc1_neurons = self.opt.get_decoder().layers[0].fc1.out_features
+        fc2_neurons = self.opt.get_decoder().layers[0].fc2.out_features
+        self.opt.eval()
+        importance_score = torch.zeros(num_hidden_layers, num_heads)
+        fc1_importance_score = torch.zeros(num_hidden_layers, fc1_neurons)
+        fc2_importance_score = torch.zeros(num_hidden_layers, fc2_neurons)
+        izjns = 0
+        for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
+            izjns += 1
+            if izjns > 500:
+                break
+            batch_max_length = torch.max(l_ctx + l_cont).item()
+            inp = inp[:, :batch_max_length]
+            attn_mask = torch.ones((len(l_ctx), batch_max_length), dtype=torch.long)
+            labels = torch.empty((len(l_ctx), batch_max_length), dtype=torch.long).fill_(-100.)
+            for i in range(len(l_ctx)):
+                attn_mask[i][l_ctx[i]+l_cont[i]:] = torch.zeros(batch_max_length - (l_ctx[i]+l_cont[i]))
+                labels[i][l_ctx[i]: l_ctx[i] + l_cont[i]] = inp[i][l_ctx[i]:l_ctx[i]+l_cont[i]]
+                tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
+                eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
+            ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
+            for layer in range(num_hidden_layers):
+                self_attention = self.opt.get_decoder().layers[layer].self_attn
+                
+                fc1_output_act = self.opt.get_decoder().layers[layer].fc1_output
+                fc2_output_act = self.opt.get_decoder().layers[layer].fc2_output
+                attn_x = self_attention.context_layer_val
+                attn_x = rearrange(attn_x, 'b l (h d) -> b l h d', h=num_heads)
+                l2_norm_info = attn_x.norm(dim=0).norm(dim=0).norm(dim=-1)
+                importance_score[layer] += l2_norm_info.cpu()
+                fc1_importance_score[layer] += fc1_output_act.norm(dim=0).cpu()
+                fc2_importance_score[layer] += fc2_output_act.norm(dim=0).cpu()
+            ## helps in reducing the memory footprint
+            self.opt.zero_grad()
+            del attn_x, ll
+            del fc1_output_act, fc2_output_act
+            for param in self.opt.parameters():
+                param.grad = None
+        # Save it as 'epenas' + task.DATASET_PATH + str(num_fewshot) + '.pkl' in a new directory called 'zcps/' + self.opt.config._name_or_path.replace("facebook/", "") + "/"
+        model_name = self.opt.config._name_or_path.replace("facebook/", "")
+        if not os.path.exists(f'zcps'):
+            os.makedirs(f'zcps')
+        base_path = f'zcps/{model_name}'
+        # ensure base_path exists?
+        if not os.path.exists(base_path):
+            os.makedirs(base_path)
+        with open(base_path + f'/l2_norm_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(importance_score, f)
+        with open(base_path + f'/fc1_l2_norm_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(fc1_importance_score, f)
+        with open(base_path + f'/fc2_l2_norm_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(fc2_importance_score, f)
+        return importance_score
+    
+
+    def calculate_jacov(self, dataloader, method="NA", task="NA", num_fewshot=0):
+        """
+        For EPE-NAS, we need to go through each item in data loader
+        For EACH layer AND HEAD, have a dictionary mapping the class to all jacobians.
+        """
+        num_hidden_layers = self.opt.config.num_hidden_layers
+        num_heads = self.opt.config.num_attention_heads
+        tot_tokens, eff_tokens = 0, 0
+        self.opt.eval()
+        importance_score = torch.zeros(num_hidden_layers, num_heads)
+        izjns = 0
+        # For each head in each layer, stack the [b, l, d] grad_attn_x across the dataloader
+        perhead_class_jacobians = {"l_{}".format(i): {"h_{}".format(h): [] for h in range(num_heads)} for i in range(num_hidden_layers)}
+        for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
+            izjns += 1
+            if izjns > 500:
+                break
+            if izjns > 500:
+                break
+            batch_max_length = torch.max(l_ctx + l_cont).item()
+            inp = inp[:, :batch_max_length]
+            attn_mask = torch.ones((len(l_ctx), batch_max_length), dtype=torch.long)
+            labels = torch.empty((len(l_ctx), batch_max_length), dtype=torch.long).fill_(-100.)
+            for i in range(len(l_ctx)):
+                attn_mask[i][l_ctx[i]+l_cont[i]:] = torch.zeros(batch_max_length - (l_ctx[i]+l_cont[i]))
+                labels[i][l_ctx[i]: l_ctx[i] + l_cont[i]] = inp[i][l_ctx[i]:l_ctx[i]+l_cont[i]]
+                tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
+                eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
+            ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
+            ll.backward(retain_graph=True)
+            for layer in range(num_hidden_layers):
+                self_attention = self.opt.get_decoder().layers[layer].self_attn
+                attn_x = self_attention.context_layer_val
+                grad_attn_x = self_attention.context_layer_val_grad
+                
+                dim = attn_x.shape[-1]
+                attn_x, grad_attn_x = map(lambda x: rearrange(x, 'b l (h d) -> b l h d', h=num_heads, d=dim//num_heads), (attn_x, grad_attn_x))
+                for h_ in range(num_heads):
+                    # if len(perhead_class_jacobians["l_{}".format(layer)]["h_{}".format(h_)]) == 0:
+                    #     perhead_class_jacobians["l_{}".format(layer)]["h_{}".format(h_)] = [grad_attn_x[:, :, h_, :].squeeze()]
+                    for l_ in range(grad_attn_x.shape[1]):
+                        perhead_class_jacobians["l_{}".format(layer)]["h_{}".format(h_)].append(grad_attn_x[:, l_, h_, :].squeeze())
+            ## helps in reducing the memory footprint
+            self.opt.zero_grad()
+            del attn_x, grad_attn_x, ll
+            for param in self.opt.parameters():
+                param.grad = None
+        for layer in range(num_hidden_layers):
+            for head in tqdm(range(num_heads)):
+                jacobians = torch.stack(perhead_class_jacobians["l_{}".format(layer)]["h_{}".format(head)], dim=0).cpu()
+                # remove wherever jacobians.sum(dim=-1) == 0
+                jacobians = jacobians[jacobians.sum(dim=-1) != 0]
+                corrs = np.corrcoef(jacobians)
+                v, _ = np.linalg.eig(corrs)
+                v = np.abs(v)
+                k = 1e-5
+                jc = -np.sum(np.log(v + k) + 1.0 / (v + k))
+                # If a complex number comes, just try v = np.abs(v) or corrs += np.eye(corrs.shape[0]) * k
+                importance_score[layer, head] += jc
+        # Save it as 'epenas' + task.DATASET_PATH + str(num_fewshot) + '.pkl' in a new directory called 'zcps/' + self.opt.config._name_or_path.replace("facebook/", "") + "/"
+        model_name = self.opt.config._name_or_path.replace("facebook/", "")
+        if not os.path.exists(f'zcps'):
+            os.makedirs(f'zcps')
+        base_path = f'zcps/{model_name}'
+        # ensure base_path exists?
+        if not os.path.exists(base_path):
+            os.makedirs(base_path)
+        with open(base_path + f'/jacov_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(importance_score, f)
+        return importance_score
+
+
+    def calculate_grasp(self, dataloader, method="NA", task="NA", num_fewshot=0):
+        """
+        For EPE-NAS, we need to go through each item in data loader
+        For EACH layer AND HEAD, have a dictionary mapping the class to all jacobians.
+        """
+        num_hidden_layers = self.opt.config.num_hidden_layers
+        num_heads = self.opt.config.num_attention_heads
+        fc1_neurons = self.opt.get_decoder().layers[0].fc1.out_features
+        fc2_neurons = self.opt.get_decoder().layers[0].fc2.out_features
+        tot_tokens, eff_tokens = 0, 0
+        self.opt.eval()
+        importance_score = torch.zeros(num_hidden_layers, num_heads)
+        fc1_importance_score = torch.zeros(num_hidden_layers, fc1_neurons)
+        fc2_importance_score = torch.zeros(num_hidden_layers, fc2_neurons)
+        izjns = 0
+        for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
+            izjns += 1
+            if izjns > 500:
+                break
+            batch_max_length = torch.max(l_ctx + l_cont).item()
+            inp = inp[:, :batch_max_length]
+            attn_mask = torch.ones((len(l_ctx), batch_max_length), dtype=torch.long)
+            labels = torch.empty((len(l_ctx), batch_max_length), dtype=torch.long).fill_(-100.)
+            for i in range(len(l_ctx)):
+                attn_mask[i][l_ctx[i]+l_cont[i]:] = torch.zeros(batch_max_length - (l_ctx[i]+l_cont[i]))
+                labels[i][l_ctx[i]: l_ctx[i] + l_cont[i]] = inp[i][l_ctx[i]:l_ctx[i]+l_cont[i]]
+                tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
+                eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
+            ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
+            ll.backward(retain_graph=True)
+            grad_w = [self.opt.get_decoder().layers[layer].self_attn.context_layer_val_grad.clone() for layer in range(num_hidden_layers)]
+            grad_w_f1 = [self.opt.get_decoder().layers[layer].fc1.weight.grad.clone() for layer in range(num_hidden_layers)]
+            grad_w_f2 = [self.opt.get_decoder().layers[layer].fc2.weight.grad.clone() for layer in range(num_hidden_layers)]
+            ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
+            # TODO: Backward pass below is WRONG
+            ll.backward(create_graph=True)
+            z = 0
+            for layer in range(num_hidden_layers):
+                self_attention = self.opt.get_decoder().layers[layer].self_attn
+                fc1_weight_grad = self.opt.get_decoder().layers[layer].fc1.weight.grad
+                fc2_weight_grad = self.opt.get_decoder().layers[layer].fc2.weight.grad
+                num_heads = self_attention.num_heads
+                grad_attn_x = self_attention.context_layer_val_grad
+                z += (grad_w[layer] * grad_attn_x).mean()
+                z += (grad_w_f1[layer] * fc1_weight_grad).mean()
+                z += (grad_w_f2[layer] * fc2_weight_grad).mean()
+            z.backward()
+            for layer in range(num_hidden_layers):
+                self_attention_grad = self.opt.get_decoder().layers[layer].self_attn.context_layer_val_grad
+                fc1_weight_grad = self.opt.get_decoder().layers[layer].fc1.weight.grad
+                fc2_weight_grad = self.opt.get_decoder().layers[layer].fc2.weight.grad
+                # fc1 fc2 weights, attn map
+                self_attention = self.opt.get_decoder().layers[layer].self_attn.context_layer_val
+                fc1_weight = self.opt.get_decoder().layers[layer].fc1.weight
+                fc2_weight = self.opt.get_decoder().layers[layer].fc2.weight
+                self_attn_metrics = -self_attention_grad * self_attention
+                fc1_metrics = -fc1_weight_grad * fc1_weight
+                fc2_metrics = -fc2_weight_grad * fc2_weight
+                # rearrange self_attn_metrics 
+                self_attn_metrics = rearrange(self_attn_metrics, 'b l (h d) -> b l h d', h=num_heads)
+                # mean on second dim
+                fc1_metrics = fc1_metrics.mean(dim=-1)
+                fc2_metrics = fc2_metrics.mean(dim=-1)
+                self_attn_metrics = self_attn_metrics.sum(dim=0).mean(dim=0).sum(dim=-1)
+                importance_score[layer] += self_attn_metrics.detach().cpu()
+                fc1_importance_score[layer] += fc1_metrics.detach().cpu()
+                fc2_importance_score[layer] += fc2_metrics.detach().cpu()
+            ## helps in reducing the memory footprint
+            self.opt.zero_grad()
+            del ll
+            del fc1_weight_grad, fc2_weight_grad
+            for param in self.opt.parameters():
+                param.grad = None
+        model_name = self.opt.config._name_or_path.replace("facebook/", "")
+        if not os.path.exists(f'zcps'):
+            os.makedirs(f'zcps')
+        base_path = f'zcps/{model_name}'
+        # ensure base_path exists?
+        if not os.path.exists(base_path):
+            os.makedirs(base_path)
+        with open(base_path + f'/grasp_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(importance_score, f)
+        with open(base_path + f'/grasp_fc1_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(fc1_importance_score, f)
+        with open(base_path + f'/grasp_fc2_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(fc2_importance_score, f)
+        return importance_score
+
+    def calculate_grad_norm(self, dataloader, method="NA", task="NA", num_fewshot=0):
+        """
+        For EPE-NAS, we need to go through each item in data loader
+        For EACH layer AND HEAD, have a dictionary mapping the class to all jacobians.
+        """
+        num_hidden_layers = self.opt.config.num_hidden_layers
+        num_heads = self.opt.config.num_attention_heads
+        tot_tokens, eff_tokens = 0, 0
+        fc1_neurons = self.opt.get_decoder().layers[0].fc1.out_features
+        fc2_neurons = self.opt.get_decoder().layers[0].fc2.out_features
+        self.opt.eval()
+        importance_score = torch.zeros(num_hidden_layers, num_heads)
+        fc1_importance_score = torch.zeros(num_hidden_layers, fc1_neurons)
+        fc2_importance_score = torch.zeros(num_hidden_layers, fc2_neurons)
+        izjns = 0
+        for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
+            izjns += 1
+            if izjns > 500:
+                break
+            batch_max_length = torch.max(l_ctx + l_cont).item()
+            inp = inp[:, :batch_max_length]
+            attn_mask = torch.ones((len(l_ctx), batch_max_length), dtype=torch.long)
+            labels = torch.empty((len(l_ctx), batch_max_length), dtype=torch.long).fill_(-100.)
+            for i in range(len(l_ctx)):
+                attn_mask[i][l_ctx[i]+l_cont[i]:] = torch.zeros(batch_max_length - (l_ctx[i]+l_cont[i]))
+                labels[i][l_ctx[i]: l_ctx[i] + l_cont[i]] = inp[i][l_ctx[i]:l_ctx[i]+l_cont[i]]
+                tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
+                eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
+            ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
+            ll.backward()
+            for layer in range(num_hidden_layers):
+                self_attention = self.opt.get_decoder().layers[layer].self_attn
+                attn_x = self_attention.context_layer_val
+                grad_attn_x = self_attention.context_layer_val_grad            
+                fc1_weight_grad = self.opt.get_decoder().layers[layer].fc1.weight.grad
+                fc2_weight_grad = self.opt.get_decoder().layers[layer].fc2.weight.grad
+                grad_attn_x = rearrange(grad_attn_x, 'b l (h d) -> b l h d', h=num_heads)
+                grad_norm_info = grad_attn_x.norm(dim=0).norm(dim=0).norm(dim=-1)
+                importance_score[layer] += grad_norm_info.cpu().detach()
+                fc1_grad_norm_info = fc1_weight_grad.norm(dim=-1)
+                fc1_importance_score[layer] += fc1_grad_norm_info.cpu().detach()
+                fc2_grad_norm_info = fc2_weight_grad.norm(dim=-1)
+                fc2_importance_score[layer] += fc2_grad_norm_info.cpu().detach()
+            ## helps in reducing the memory footprint
+            self.opt.zero_grad()
+            del attn_x, grad_attn_x, ll
+            del fc1_weight_grad, fc2_weight_grad
+
+            for param in self.opt.parameters():
+                param.grad = None
+        # Save it as 'epenas' + task.DATASET_PATH + str(num_fewshot) + '.pkl' in a new directory called 'zcps/' + self.opt.config._name_or_path.replace("facebook/", "") + "/"
+        model_name = self.opt.config._name_or_path.replace("facebook/", "")
+        if not os.path.exists(f'zcps'):
+            os.makedirs(f'zcps')
+        base_path = f'zcps/{model_name}'
+        # ensure base_path exists?
+        if not os.path.exists(base_path):
+            os.makedirs(base_path)
+        with open(base_path + f'/grad_norm_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(importance_score, f)
+        with open(base_path + f'/fc1_grad_norm_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(fc1_importance_score, f)
+        with open(base_path + f'/fc2_grad_norm_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(fc2_importance_score, f)
+        return importance_score
+    
+
+    def calculate_fisher(self, dataloader, method="NA", task="NA", num_fewshot=0):
+        """
+        For EPE-NAS, we need to go through each item in data loader
+        For EACH layer AND HEAD, have a dictionary mapping the class to all jacobians.
+        """
+        num_hidden_layers = self.opt.config.num_hidden_layers
+        num_heads = self.opt.config.num_attention_heads
+        tot_tokens, eff_tokens = 0, 0
+        fc1_neurons = self.opt.get_decoder().layers[0].fc1.out_features
+        fc2_neurons = self.opt.get_decoder().layers[0].fc2.out_features
+        self.opt.eval()
+        importance_score = torch.zeros(num_hidden_layers, num_heads)
+        fc1_importance_score = torch.zeros(num_hidden_layers, fc1_neurons)
+        fc2_importance_score = torch.zeros(num_hidden_layers, fc2_neurons)
+        perlayer_class_jacobians = {"l_{}".format(i): {"h_{}".format(h): defaultdict(list) for h in range(num_heads)} for i in range(num_hidden_layers)}
+        izjns = 0
+        for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
+            izjns += 1
+            if izjns > 500:
+                break
+            batch_max_length = torch.max(l_ctx + l_cont).item()
+            inp = inp[:, :batch_max_length]
+            attn_mask = torch.ones((len(l_ctx), batch_max_length), dtype=torch.long)
+            labels = torch.empty((len(l_ctx), batch_max_length), dtype=torch.long).fill_(-100.)
+            for i in range(len(l_ctx)):
+                attn_mask[i][l_ctx[i]+l_cont[i]:] = torch.zeros(batch_max_length - (l_ctx[i]+l_cont[i]))
+                labels[i][l_ctx[i]: l_ctx[i] + l_cont[i]] = inp[i][l_ctx[i]:l_ctx[i]+l_cont[i]]
+                tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
+                eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
+            ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
+            ll.backward()
+            for layer in range(num_hidden_layers):
+                self_attention = self.opt.get_decoder().layers[layer].self_attn
+                attn_x = self_attention.context_layer_val
+                grad_attn_x = self_attention.context_layer_val_grad
+                
+                fc1_weight = self.opt.get_decoder().layers[layer].fc1.weight
+                fc2_weight = self.opt.get_decoder().layers[layer].fc2.weight
+                fc1_weight_grad = self.opt.get_decoder().layers[layer].fc1.weight.grad
+                fc2_weight_grad = self.opt.get_decoder().layers[layer].fc2.weight.grad
+                fc1_input_act = self.opt.get_decoder().layers[layer].fc1_input
+                fc1_input_act_grad = self.opt.get_decoder().layers[layer].fc1_input_grad
+                fc2_input_act = self.opt.get_decoder().layers[layer].fc2_input
+                fc2_input_act_grad = self.opt.get_decoder().layers[layer].fc2_input_grad
+                fc1_output_act = self.opt.get_decoder().layers[layer].fc1_output
+                fc1_output_act_grad = self.opt.get_decoder().layers[layer].fc1_output_grad
+                fc2_output_act = self.opt.get_decoder().layers[layer].fc2_output
+                fc2_output_act_grad = self.opt.get_decoder().layers[layer].fc2_output_grad
+
+                fisher_info = (attn_x * grad_attn_x).pow(2).mean(dim=[0, 1]).reshape(num_heads, -1).sum(dim=-1)  # averaging over batch and sequence length
+                importance_score[layer] += fisher_info.cpu().detach()
+                fc1_fisher_info = (fc1_output_act * fc1_output_act_grad).pow(2).mean(dim=[0])
+                fc1_importance_score[layer] += fc1_fisher_info.cpu().detach()
+                fc2_fisher_info = (fc2_output_act * fc2_output_act_grad).pow(2).mean(dim=[0])
+                fc2_importance_score[layer] += fc2_fisher_info.cpu().detach()
+            ## helps in reducing the memory footprint
+            self.opt.zero_grad()
+            del attn_x, grad_attn_x, ll
+            del fc1_weight, fc2_weight, fc1_weight_grad, fc2_weight_grad, fc1_input_act, fc1_input_act_grad, fc2_input_act, fc2_input_act_grad, fc1_output_act, fc1_output_act_grad, fc2_output_act, fc2_output_act_grad
+            for param in self.opt.parameters():
+                param.grad = None
+        # Save it as 'epenas' + task.DATASET_PATH + str(num_fewshot) + '.pkl' in a new directory called 'zcps/' + self.opt.config._name_or_path.replace("facebook/", "") + "/"
+        model_name = self.opt.config._name_or_path.replace("facebook/", "")
+        if not os.path.exists(f'zcps'):
+            os.makedirs(f'zcps')
+        base_path = f'zcps/{model_name}'
+        # ensure base_path exists?
+        if not os.path.exists(base_path):
+            os.makedirs(base_path)
+        with open(base_path + f'/fisher_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(importance_score, f)
+        with open(base_path + f'/fc1_fisher_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(fc1_importance_score, f)
+        with open(base_path + f'/fc2_fisher_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(fc2_importance_score, f)
+        return importance_score
+    
+
+    def calculate_epenas(self, dataloader, method="NA", task="NA", num_fewshot=0):
+        """
+        For EPE-NAS, we need to go through each item in data loader
+        For EACH layer AND HEAD, have a dictionary mapping the class to all jacobians.
+        """
+        num_hidden_layers = self.opt.config.num_hidden_layers
+        num_heads = self.opt.config.num_attention_heads
+        fc1_neurons = self.opt.get_decoder().layers[0].fc1.out_features
+        fc2_neurons = self.opt.get_decoder().layers[0].fc2.out_features
+        tot_tokens, eff_tokens = 0, 0
+        self.opt.eval()
+        importance_score = torch.zeros(num_hidden_layers, num_heads)
+        # fc1_importance_score = torch.zeros(num_hidden_layers, fc1_neurons)
+        # fc2_importance_score = torch.zeros(num_hidden_layers, fc2_neurons)
+        perlayer_class_jacobians = {"l_{}".format(i): {"h_{}".format(h): defaultdict(list) for h in range(num_heads)} for i in range(num_hidden_layers)}
+        # perfc1_class_jacobians = {"l_{}".format(i): {"h_{}".format(h): defaultdict(list) for h in range(fc1_neurons)} for i in range(num_hidden_layers)}
+        # perfc2_class_jacobians = {"l_{}".format(i): {"h_{}".format(h): defaultdict(list) for h in range(fc2_neurons)} for i in range(num_hidden_layers)}
+        izjns = 0
+        for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
+            izjns += 1
+            if izjns > 500:
+                break
+            batch_max_length = torch.max(l_ctx + l_cont).item()
+            inp = inp[:, :batch_max_length]
+            attn_mask = torch.ones((len(l_ctx), batch_max_length), dtype=torch.long)
+            labels = torch.empty((len(l_ctx), batch_max_length), dtype=torch.long).fill_(-100.)
+            for i in range(len(l_ctx)):
+                attn_mask[i][l_ctx[i]+l_cont[i]:] = torch.zeros(batch_max_length - (l_ctx[i]+l_cont[i]))
+                labels[i][l_ctx[i]: l_ctx[i] + l_cont[i]] = inp[i][l_ctx[i]:l_ctx[i]+l_cont[i]]
+                tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
+                eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
+            ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
+            ll.backward()
+            for layer in range(num_hidden_layers):
+                self_attention = self.opt.get_decoder().layers[layer].self_attn
+                attn_x = self_attention.context_layer_val
+                grad_attn_x = self_attention.context_layer_val_grad
+
+                dim = attn_x.shape[-1]
+                attn_x, grad_attn_x = map(lambda x: rearrange(x, 'b l (h d) -> b l h d', h=num_heads, d=dim//num_heads), (attn_x, grad_attn_x))
+                # Now, grad_attn_x is of shape [1, seq_len, num_heads, dim_per_head]
+                # populate perlayer_class_jacobians with the jacobians, using label of seq_len as key, layer and head from num_heads as key
+                for h_ in range(num_heads):
+                    for lab_ix, lab in enumerate(labels[0]):
+                        lab = lab.item()
+                        if lab != -100.:
+                            if lab in perlayer_class_jacobians["l_{}".format(layer)]["h_{}".format(h_)]:
+                                perlayer_class_jacobians["l_{}".format(layer)]["h_{}".format(h_)][lab] = np.vstack((perlayer_class_jacobians["l_{}".format(layer)]["h_{}".format(h_)][lab], grad_attn_x[0, lab_ix, h_, :].detach().cpu().numpy().tolist()))
+                            else:
+                                perlayer_class_jacobians["l_{}".format(layer)]["h_{}".format(h_)][lab] = [grad_attn_x[0, lab_ix, h_, :].detach().cpu().numpy().tolist()]
+                            # perlayer_class_jacobians["l_{}".format(layer)]["h_{}".format(h_)][lab].append(grad_attn_x[0, lab_ix, h_, :].detach().cpu().numpy())
+                # for lab_ix, lab in enumerate(labels[0]):
+                #     lab = lab.item()
+                #     if lab != -100.:
+                #         for n_ in range(fc1_neurons):    
+                #             if lab in perfc1_class_jacobians["l_{}".format(layer)]["h_{}".format(n_)]:
+                #                 perfc1_class_jacobians["l_{}".format(layer)]["h_{}".format(n_)][lab] = np.vstack((perfc1_class_jacobians["l_{}".format(layer)]["h_{}".format(n_)][lab], fc1_weight_grad[n_].detach().cpu().numpy().squeeze().tolist()))
+                #             else:
+                #                 perfc1_class_jacobians["l_{}".format(layer)]["h_{}".format(n_)][lab] = [fc1_weight_grad[n_].detach().cpu().numpy().squeeze().tolist()]
+                # for lab_ix, lab in enumerate(labels[0]):
+                #     lab = lab.item()
+                #     if lab != -100.:
+                #         for n_ in range(fc2_neurons):
+                #             if lab in perfc2_class_jacobians["l_{}".format(layer)]["h_{}".format(n_)]:
+                #                 perfc2_class_jacobians["l_{}".format(layer)]["h_{}".format(n_)][lab] = np.vstack((perfc2_class_jacobians["l_{}".format(layer)]["h_{}".format(n_)][lab], fc2_weight_grad[n_].detach().cpu().numpy().squeeze().tolist()))
+                #             else:
+                #                 perfc2_class_jacobians["l_{}".format(layer)]["h_{}".format(n_)][lab] = [fc2_weight_grad[n_].detach().cpu().numpy().squeeze().tolist()]
+            ## helps in reducing the memory footprint
+            self.opt.zero_grad()
+            del attn_x, grad_attn_x, ll
+            
+            for param in self.opt.parameters():
+                param.grad = None
+        classes = list(perlayer_class_jacobians["l_0"]["h_0"].keys())
+        print("Number of items per class: ", {c: len(perlayer_class_jacobians["l_0"]["h_0"][c]) for c in classes})
+        # keep only classes that have more than 10 samples
+        classes = [c for c in classes if len(perlayer_class_jacobians["l_0"]["h_0"][c]) > 4]
+        ind_corr_matrix_score = {"l_{}".format(i): {"h_{}".format(h): {} for h in range(num_heads)} for i in range(num_hidden_layers)}
+        # per_class = {"l_{}".format(i): {"h_{}".format(h): defaultdict(list) for h in range(num_heads)} for i in range(num_hidden_layers)}
+        for layer in range(num_hidden_layers):
+            for h_ in range(num_heads):
+                for c in classes:
+                    s = 0
+                    try:
+                        corrs = np.array(np.corrcoef(perlayer_class_jacobians["l_{}".format(layer)]["h_{}".format(h_)][c]))
+                        s = np.sum(np.log(abs(corrs)+1e-5))
+                        # check if s is 'nan'
+                        if not np.isnan(s):
+                            ind_corr_matrix_score["l_{}".format(layer)]["h_{}".format(h_)][c] = s
+                    except Exception as e:
+                        print("Skipping because of : ", e)
+                        continue
+                for c in ind_corr_matrix_score["l_{}".format(layer)]["h_{}".format(h_)].keys():
+                    score = 0
+                    for cj in ind_corr_matrix_score["l_{}".format(layer)]["h_{}".format(h_)].keys():
+                        score += np.absolute(ind_corr_matrix_score["l_{}".format(layer)]["h_{}".format(h_)][c] - ind_corr_matrix_score["l_{}".format(layer)]["h_{}".format(h_)][cj])
+                    importance_score[layer][h_] += score
+            # for fc1_n in range(fc1_neurons):
+            #     for c in classes:
+            #         s = 0
+            #         try:
+            #             corrs = np.array(np.corrcoef(perfc1_class_jacobians["l_{}".format(layer)]["h_{}".format(fc1_n)][c]))
+            #             s = np.sum(np.log(abs(corrs)+1e-5))
+            #             # check if s is 'nan'
+            #             if not np.isnan(s):
+            #                 ind_corr_matrix_score["l_{}".format(layer)]["h_{}".format(fc1_n)][c] = s
+            #         except Exception as e:
+            #             print("Skipping because of : ", e)
+            #             continue
+            #     for c in ind_corr_matrix_score["l_{}".format(layer)]["h_{}".format(fc1_n)].keys():
+            #         score = 0
+            #         for cj in ind_corr_matrix_score["l_{}".format(layer)]["h_{}".format(fc1_n)].keys():
+            #             score += np.absolute(ind_corr_matrix_score["l_{}".format(layer)]["h_{}".format(fc1_n)][c] - ind_corr_matrix_score["l_{}".format(layer)]["h_{}".format(fc1_n)][cj])
+            #         fc1_importance_score[layer][fc1_n] += score
+            # for fc2_n in range(fc2_neurons):
+            #     for c in classes:
+            #         s = 0
+            #         try:
+            #             corrs = np.array(np.corrcoef(perfc2_class_jacobians["l_{}".format(layer)]["h_{}".format(fc2_n)][c]))
+            #             s = np.sum(np.log(abs(corrs)+1e-5))
+            #             # check if s is 'nan'
+            #             if not np.isnan(s):
+            #                 ind_corr_matrix_score["l_{}".format(layer)]["h_{}".format(fc2_n)][c] = s
+            #         except Exception as e:
+            #             print("Skipping because of : ", e)
+            #             continue
+            #     for c in ind_corr_matrix_score["l_{}".format(layer)]["h_{}".format(fc2_n)].keys():
+            #         score = 0
+            #         for cj in ind_corr_matrix_score["l_{}".format(layer)]["h_{}".format(fc2_n)].keys():
+            #             score += np.absolute(ind_corr_matrix_score["l_{}".format(layer)]["h_{}".format(fc2_n)][c] - ind_corr_matrix_score["l_{}".format(layer)]["h_{}".format(fc2_n)][cj])
+            #         fc2_importance_score[layer][fc2_n] += score
+        # Save it as 'epenas' + task.DATASET_PATH + str(num_fewshot) + '.pkl' in a new directory called 'zcps/' + self.opt.config._name_or_path.replace("facebook/", "") + "/"
+        model_name = self.opt.config._name_or_path.replace("facebook/", "")
+        if not os.path.exists(f'zcps'):
+            os.makedirs(f'zcps')
+        base_path = f'zcps/{model_name}'
+        # ensure base_path exists?
+        if not os.path.exists(base_path):
+            os.makedirs(base_path)
+        with open(base_path + f'/epenas_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            pickle.dump(importance_score, f)
+        # with open(base_path + f'/epenas_fc1_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+        #     pickle.dump(fc1_importance_score, f)
+        # with open(base_path + f'/epenas_fc2_{task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+        #     pickle.dump(fc2_importance_score, f)
+        return importance_score
+
+    def calculate_importance(self, dataloader, method="original", task="NotProvided", num_fewshot=0):
+        num_hidden_layers = self.opt.config.num_hidden_layers
+        num_heads = self.opt.config.num_attention_heads
+        tot_tokens, eff_tokens = 0, 0
+        if method != "predictor":
+            importance_score = torch.zeros(num_hidden_layers, num_heads).to('cpu')
+        ## disable dropout
+        self.opt.eval()
+        encoding_dict = {}
+        tracker = 0
+        for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
+            if method == "predictor":
+                importance_score = torch.zeros(num_hidden_layers, num_heads).to('cpu')
+            batch_max_length = torch.max(l_ctx + l_cont).item()
+            inp = inp[:, :batch_max_length]
+            attn_mask = torch.ones((len(l_ctx), batch_max_length), dtype=torch.long)
+            labels = torch.empty((len(l_ctx), batch_max_length), dtype=torch.long).fill_(-100.)
+            for i in range(len(l_ctx)):
+                attn_mask[i][l_ctx[i]+l_cont[i]:] = torch.zeros(batch_max_length - (l_ctx[i]+l_cont[i]))
+                labels[i][l_ctx[i]: l_ctx[i] + l_cont[i]] = inp[i][l_ctx[i]:l_ctx[i]+l_cont[i]]
+                tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
+                eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
+            ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
+            token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")
+            ll.backward()
+            for layer in range(num_hidden_layers):
+                self_attention = self.opt.get_decoder().layers[layer].self_attn
+                attn_x = self_attention.context_layer_val
+                grad_attn_x = self_attention.context_layer_val_grad
+                dim = attn_x.shape[-1]
+                if method in ["original", "predictor"]:
                     attn_x, grad_attn_x = map(lambda x: rearrange(x, 'b l (h d) -> b h l d', h=num_heads, d=dim//num_heads), (attn_x, grad_attn_x)) # shape = bs, num_heads, seq_len, dim_per_head
                     dot = torch.einsum("bhli,bhli->bhl", [grad_attn_x, attn_x]).to('cpu') # not all layers are on the same device hence make sure dot is on the self.device
                     importance_score[layer] += dot.abs().sum(-1).sum(0).detach()
+                    # Convert to softmax
                 elif method == "headmagn":
                     attn_x, grad_attn_x = map(lambda x: rearrange(x, 'b l (h d) -> b h l d', h=num_heads, d=dim//num_heads), (attn_x, grad_attn_x)) # shape = bs, num_heads, seq_len, dim_per_head
                     # Here, we reduce over the 'i' dimension to get the importance score for each head
                     dot = torch.einsum("bhli,bhli->bhl", [attn_x, attn_x]).to('cpu') # not all layers are on the same device hence make sure dot is on the self.device
                     magnmap = dot.abs().sum(-1).sum(0).detach()
                     importance_score[layer] += magnmap.detach().to("cpu")
+                # elif method == "predictor":
+                #     # Here, we use the predictor emitted output for the importance score
+                #     # the predictor should be trained on 30% of the importance dictionary generated above
+                #     # and then generate for everything.
+                #     # However, we should change our evaluate method to only  use the latter 70% of the dataset
+                #     headpred = headpredictor_dict[layer].to(self.device)
+                #     magnmap = headpred(token_embedding.to(self.device).float()).detach().to("cpu").squeeze()
+                #     importance_score[layer] += magnmap.detach().to("cpu")
                 else:
                     raise ValueError("Invalid method")
+            encoding_dict[tracker] = (token_embedding, importance_score)
             ## helps in reducing the memory footprint
             self.opt.zero_grad()
-            # print("At headimp calc")
-            # import pdb; pdb.set_trace()
             del attn_x, grad_attn_x, dot, ll
             # self.ds_engine.module.zero_grad()
             for param in self.opt.parameters():
                 param.grad = None
-
+            tracker += 1
+        model_name = self.opt.config._name_or_path.replace("facebook/", "")
+        base_path = f'pl_traces_{model_name}'
+        # Save the encoding_dict as a pt file
+        if method == "predictor":
+            with open(base_path + f'/{num_fewshot}_shot_trace_{task}_{method}.pkl', 'wb') as f:
+                pickle.dump(encoding_dict, f)
+            exit(0)
         importance_score[:-1] /= tot_tokens
         importance_score[-1] /= eff_tokens
         return importance_score

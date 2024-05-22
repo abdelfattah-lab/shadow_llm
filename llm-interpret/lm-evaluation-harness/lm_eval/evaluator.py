@@ -140,17 +140,92 @@ def head_importance(
 
         tokenizer = lm.get_tokenizer()
         dataloader = task.get_dataloader(tokenizer, split, subset_size = 2500, batch_size = lm.batch_size, num_fewshot = num_fewshot)
+    
+        """
+        ####### epe_nas #######
+        Evaluating their behavior using local linear operators at different data points
+        1. Calculate Jacobian for different data-points.
+            -> Evaluate correlation of different points in same class.
+        2. Covariance of Jacobian with the average of the class it belongs to
+            -> Each corr.mat of diff. size. Take an average measure. 
+        Discussion:
+            There is no class measure of transformers. Thus, how can we calculate this variance?
+            NOTE: We do an interesting per-token clustering lol
+                  for FFN, each neuron has a 'context' independent embedding
+                  will have to see how it works out
+            [ ** FFN IMP CALC DEPRECATED ** ]
+        ####### fisher #######
+        2nd Order dLoss on actvn removal -> empirical estimate for binary mask param used to toggle channel
+        1. (a*dL/da)**2
+        ####### flops  #######
+        Every head is of the same parameter count, thus it is irrelevant
+        ####### GradNorm #######
+        1. |dL/da|
+        ####### Grasp ######
+        1. -(H*dL/dW).W
+                NOTE: We use dA, A and H_{a}, making it a second order GBIS
+                NOTE: Second order MAY not be happening? head_grad_w ==  head_grad_attn_x
+        ####### jacov ######
+        Correlation of jacobians with different inputs. Class invariant alternative to epe_nas?
+        1. -Sum_{i} (log(eigv_{i}(corr(J)) + e) + 1/(eigv_{i}(corr(J)) + e))
+                NOTE: Class is found by using each token predicted as a class.
+        ####### naswot ######
+        'Shatter' capacity of neuron. **May not make sense for attention map**
+        1. K += (x @ x.T) + ((1.-x) @ (1.-x.T))
+        2. slogdet(K)
+                NOTE: Does not make sense without ReLU? 
+                      Does scaled attention 'shatter'
+        ###### plain ###### NOTE: RENAMED TO plainact
+        1. |dL/dW * W|
+                NOTE: We use dA and A, making it same as GBIS from 66B paper.
+                "plain_act"
+        ###### snip ###### NOTE: BECOMES SAME AS PLAINACT when converted to activation (?)
+        1. |dL/dWmask| -> Investigate dWmask more, dynamic reversal of network by 
+            having placeholder weights seem important, but may be 'equivalent' to plain.
+            NOTE: We add a mask and measure its gradients for attention. 
+                  We take mean of this mask, but max/norm/abs may be more helpful?
+        ###### synflow ######
+        NOTE: It seems like the synethtic_loss (sensitivity sum maximization) backward
+        is the same as grad_attn_x? which makes this simply grad_norm?
+        Also, it is for weights / params. 
+
+        ##### zen ######
         
+        """
         # print("At headimp calc")
         # import pdb; pdb.set_trace()
-        result = lm.calculate_importance(dataloader, method)        
-        os.makedirs(os.path.dirname(save_importance_path), exist_ok = True)
-        with open(save_importance_path, 'wb') as handle:
-            pickle.dump(result, handle)
-            print('Importance numbers saved!!')
+        # num_hidden_layers = lm.opt.config.num_hidden_layers
+        # num_heads = lm.opt.config.num_attention_heads
+        # measures = ['epenas', 'fisher', 'grad_norm', 'grasp', 'jacov', \
+        #             'l2_norm', 'nwot', 'plainact', 'snip', 'synflow', 'zen']
+        measures = ['epenas', 'fisher', 'grad_norm', 'grasp', 'jacov', \
+                    'l2_norm', 'nwot', 'plainact', 'snip', 'oracle', 'oracle_ga']
+        # importance_dict = {m: torch.zeros(num_hidden_layers, num_heads).to('cpu') for m in measures}
+        for measure in measures:
+            # if measure not in ['epenas', 'fisher', 'grad_norm', 'grasp', 'jacov', \
+            #         'l2_norm', 'nwot', 'plainact', 'snip']: # synflow and zen skipped.
+            #     continue
+            if measure not in ['oracle_ga']:
+                continue
+            # importance_dict[measure] = lm.calculate_importance(dataloader, method, task, num_fewshot, measure)
+            # same as above, but function is lm.calculate_{measure}
+            print("Calculating importance for ", measure)
+            # importance_dict[measure] = 
+            _ = getattr(lm, f'calculate_{measure}')(dataloader, method, task, num_fewshot)
+            print(f'Importance for {measure} calculated!!')
 
-        return result
-        
+
+        # Calculate base style magnitude
+        # result = lm.calculate_importance(dataloader, method, task, num_fewshot)     
+
+        # os.makedirs(os.path.dirname(save_importance_path), exist_ok = True)
+        # with open(save_importance_path, 'wb') as handle:
+        #     pickle.dump(result, handle)
+        #     print('Importance numbers saved!!')
+
+        # return result
+        return _
+
 @positional_deprecated
 def evaluate(
     lm,
@@ -239,6 +314,8 @@ def evaluate(
         # deterministically shuffle docs and chop off the first `limit` because sometimes docs are in some kind of order
         # can remove 1000 during actual evaluation
         task_docs = list(task_doc_func())
+        # Only do first 2500
+        # task_docs = list(task.training_docs())[:2500]
         rnd = random.Random()
         rnd.seed(42)
         rnd.shuffle(task_docs)
@@ -248,7 +325,7 @@ def evaluate(
             if description_dict and task_name in description_dict
             else ""
         )
-
+        # Here, we should limit requests to the latter 70% of the data-set.
         for doc_id, doc in enumerate(itertools.islice(task_docs, 0, limit)):
 
             if decontaminate and task.should_decontaminate():

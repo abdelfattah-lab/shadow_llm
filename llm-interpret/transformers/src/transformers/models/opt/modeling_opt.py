@@ -287,6 +287,17 @@ class OPTDecoderLayer(nn.Module):
         self.fc2 = nn.Linear(config.ffn_dim, self.embed_dim)
         self.final_layer_norm = nn.LayerNorm(self.embed_dim)
 
+        # Initialize variables to save activations and gradients
+        self.fc1_input = None
+        self.fc1_output = None
+        self.fc2_input = None
+        self.fc2_output = None
+
+        self.fc1_input_grad = None
+        self.fc1_output_grad = None
+        self.fc2_input_grad = None
+        self.fc2_output_grad = None
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -345,12 +356,37 @@ class OPTDecoderLayer(nn.Module):
             if self.do_layer_norm_before:
                 hidden_states = self.final_layer_norm(hidden_states)
 
+            self.fc1_input = hidden_states
             hidden_states = self.fc1(hidden_states)
+            self.fc1_output = hidden_states
+
             hidden_states = self.activation_fn(hidden_states)
 
+            self.fc2_input = hidden_states
             hidden_states = self.fc2(hidden_states)
+            self.fc2_output = hidden_states
+
             hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
             hidden_states = (residual + hidden_states).view(hidden_states_shape)
+
+            # Register hooks for gradients
+            def save_fc1_input_grad(x):
+                self.fc1_input_grad = x
+            def save_fc1_output_grad(x):
+                self.fc1_output_grad = x
+            def save_fc2_input_grad(x):
+                self.fc2_input_grad = x
+            def save_fc2_output_grad(x):
+                self.fc2_output_grad = x
+
+            if self.fc1_input.requires_grad:
+                self.fc1_input.register_hook(save_fc1_input_grad)
+            if self.fc1_output.requires_grad:
+                self.fc1_output.register_hook(save_fc1_output_grad)
+            if self.fc2_input.requires_grad:
+                self.fc2_input.register_hook(save_fc2_input_grad)
+            if self.fc2_output.requires_grad:
+                self.fc2_output.register_hook(save_fc2_output_grad)
 
         # 350m applies layer norm AFTER attention
         if not self.do_layer_norm_before:

@@ -1,6 +1,7 @@
 
 *.pth
 *.pt
+*.pkl
 *_tokenizer/
 *_checkpoints/
 
