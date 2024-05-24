@@ -88,6 +88,7 @@ def simple_evaluate(
             bootstrap_iters=bootstrap_iters,
             description_dict=description_dict,
             decontamination_ngrams_path=decontamination_ngrams_path,
+            model_args=model_args,
         )
         results["config"] = {
             "model": model,
@@ -112,6 +113,7 @@ def simple_evaluate(
                 description_dict=description_dict,
                 save_importance_path=save_importance_path,
                 method=method,
+                model_args=model_args,
             )    
 
     return results
@@ -126,7 +128,8 @@ def head_importance(
     num_fewshot=0,
     description_dict=None,
     save_importance_path=None,
-    method="original"
+    method="original",
+    model_args=None,
 ):
     '''
         Docstring
@@ -192,38 +195,68 @@ def head_importance(
         ##### zen ######
         
         """
-        # print("At headimp calc")
-        # import pdb; pdb.set_trace()
-        # num_hidden_layers = lm.opt.config.num_hidden_layers
-        # num_heads = lm.opt.config.num_attention_heads
-        # measures = ['epenas', 'fisher', 'grad_norm', 'grasp', 'jacov', \
-        #             'l2_norm', 'nwot', 'plainact', 'snip', 'synflow', 'zen']
-        measures = ['epenas', 'fisher', 'grad_norm', 'grasp', 'jacov', \
-                    'l2_norm', 'nwot', 'plainact', 'snip', 'oracle', 'oracle_ga']
-        # importance_dict = {m: torch.zeros(num_hidden_layers, num_heads).to('cpu') for m in measures}
+        # # print("At headimp calc")
+        # # import pdb; pdb.set_trace()
+        # # num_hidden_layers = lm.opt.config.num_hidden_layers
+        # # num_heads = lm.opt.config.num_attention_heads
+        # # measures = ['epenas', 'fisher', 'grad_norm', 'grasp', 'jacov', \
+        # #             'l2_norm', 'nwot', 'plainact', 'snip', 'synflow', 'zen']
+        # # measures = ['epenas', 'fisher', 'grad_norm', 'grasp', 'jacov', \
+        # #             'l2_norm', 'nwot', 'plainact', 'snip', 'oracle_ga']
+        # measures_done = None
+        # # try:
+        # #     import os
+        # #     zcpfiles = os.listdir("zcps/opt-1.3b/")
+        # #     # Get only files relevant to this run
+        # #     zcpfiles = [f for f in zcpfiles if task.DATASET_PATH in f]
+        # #     # Remove FC related files
+        # #     zcpfiles = [f for f in zcpfiles if "fc1_" not in f]
+        # #     zcpfiles = [f for f in zcpfiles if "fc2_" not in f]
+        # #     # Get list of measures only
+        # #     measures_done = [f.replace(".pkl", "").replace("_"+task.DATASET_PATH+"_0", "") for f in zcpfiles]
+        # # except:
+        # #     pass
+        # # measures = ['epenas', 'fisher', 'grad_norm', 'grasp', 'l2_norm', 'nwot', 'plainact', 'snip', 'oracle_ga'] # JACOV DISABLED.
+        # # measures = ['snip', 'nwot', 'oracle_ga', 'plainact', 'l2_norm'] # JACOV DISABLED.
+        # measures = ['oracle_opt']
+        # # measures = ['epenas', 'fisher', 'grad_norm', 'grasp', 'nwot', 'snip', 'oracle_ga'] # JACOV DISABLED. plainact and l2_norm disabled temp.
+        # print("Task: ", task.DATASET_PATH)
+        # print("All measures:", measures)
+        # if measures_done is not None:
+        #     measures = [m for m in measures if m not in measures_done]
+        # print("Measures to be calculated:", measures)
+        # # exit(0)
+        # # importance_dict = {m: torch.zeros(num_hidden_layers, num_heads).to('cpu') for m in measures}
+        # for measure in measures:
+        #     # if measure not in ['epenas', 'fisher', 'grad_norm', 'grasp', 'jacov', \
+        #     #         'l2_norm', 'nwot', 'plainact', 'snip']: # synflow and zen skipped.
+        #     #     continue
+        #     # if measure not in ['oracle_ga']:
+        #     #     continue
+        #     # importance_dict[measure] = lm.calculate_importance(dataloader, method, task, num_fewshot, measure)
+        #     # same as above, but function is lm.calculate_{measure}
+        #     print("Calculating importance for ", measure)
+        #     # importance_dict[measure] = 
+        #     _ = getattr(lm, f'calculate_{measure}')(dataloader, method, task, num_fewshot)
+        #     print(f'Importance for {measure} calculated!!')
+
+
+        # # Calculate base style magnitude
+        # # result = lm.calculate_importance(dataloader, method, task, num_fewshot)     
+
+        # # os.makedirs(os.path.dirname(save_importance_path), exist_ok = True)
+        # # with open(save_importance_path, 'wb') as handle:
+        # #     pickle.dump(result, handle)
+        # #     print('Importance numbers saved!!')
+
+        # # return result
+        
+
+        from types import SimpleNamespace
+        nspmodel_args = SimpleNamespace(**{item.split('=')[0]: item.split('=')[1] for item in model_args.split(',')})
+        measures = [nspmodel_args.zcp_calc]
         for measure in measures:
-            # if measure not in ['epenas', 'fisher', 'grad_norm', 'grasp', 'jacov', \
-            #         'l2_norm', 'nwot', 'plainact', 'snip']: # synflow and zen skipped.
-            #     continue
-            if measure not in ['oracle_ga']:
-                continue
-            # importance_dict[measure] = lm.calculate_importance(dataloader, method, task, num_fewshot, measure)
-            # same as above, but function is lm.calculate_{measure}
-            print("Calculating importance for ", measure)
-            # importance_dict[measure] = 
             _ = getattr(lm, f'calculate_{measure}')(dataloader, method, task, num_fewshot)
-            print(f'Importance for {measure} calculated!!')
-
-
-        # Calculate base style magnitude
-        # result = lm.calculate_importance(dataloader, method, task, num_fewshot)     
-
-        # os.makedirs(os.path.dirname(save_importance_path), exist_ok = True)
-        # with open(save_importance_path, 'wb') as handle:
-        #     pickle.dump(result, handle)
-        #     print('Importance numbers saved!!')
-
-        # return result
         return _
 
 @positional_deprecated
@@ -236,6 +269,7 @@ def evaluate(
     bootstrap_iters=100000,
     description_dict=None,
     decontamination_ngrams_path=None,
+    model_args=None,
 ):
     """Instantiate and evaluate a model on a list of tasks.
 
@@ -319,14 +353,22 @@ def evaluate(
         rnd = random.Random()
         rnd.seed(42)
         rnd.shuffle(task_docs)
+        
+        # Limit the number of task documents to a maximum of 5000
 
         description = (
             description_dict[task_name]
             if description_dict and task_name in description_dict
             else ""
         )
+
+        total_requests = 0  # Initialize a counter for total requests
+        limit_requests = 5000  # Set the maximum number of requests
         # Here, we should limit requests to the latter 70% of the data-set.
         for doc_id, doc in enumerate(itertools.islice(task_docs, 0, limit)):
+
+            if total_requests >= limit_requests:
+                break  # Stop processing if the limit is reached
 
             if decontaminate and task.should_decontaminate():
                 docs_for_decontamination[(task_name, task_set)].append(
@@ -340,6 +382,9 @@ def evaluate(
             reqs = task.construct_requests(doc, ctx)
             if not isinstance(reqs, (list, tuple)):
                 reqs = [reqs]
+
+            total_requests += len(reqs)  # Update the counter with the number of new requests
+
             for i, req in enumerate(reqs):
                 requests[req.request_type].append(req)
                 # i: index in requests for a single task instance
@@ -393,6 +438,9 @@ def evaluate(
                 if doc_id not in overlaps[task_name]:
                     vals[(task_name, metric + decontaminate_suffix)].append(value)
 
+    from types import SimpleNamespace
+    nspmodel_args = SimpleNamespace(**{item.split('=')[0]: item.split('=')[1] for item in model_args.split(',')})
+    run_descr = nspmodel_args.head_importance_path.replace("zcps/opt-1.3b/", "").replace("_0.pkl", "") + "," + str(nspmodel_args.head_percent_mask) + "," + nspmodel_args.predictor_ + "," + nspmodel_args.maskmethod
     # aggregate results
     for (task_name, metric), items in vals.items():
         task = task_dict[task_name]
@@ -401,8 +449,9 @@ def evaluate(
             real_metric = metric.replace(
                 decontaminate_suffix, ""
             )  # decontaminated still uses the same metric
-        results[task_name][metric] = task.aggregation()[real_metric](items)
-
+        # save the model_args.head_importance_path.replace("zcps/opt-1.3b/", "").replace("_0.pkl", "") as well as model_args.predictor_ and then the real_metric
+        
+        run_descr += "," + str(task.aggregation()[real_metric](items))
         # hotfix: bleu, chrf, ter seem to be really expensive to bootstrap
         # so we run them less iterations. still looking for a cleaner way to do this
         # if metric == 'bleu':
@@ -415,6 +464,20 @@ def evaluate(
 
         #     if stderr is not None:
         #         results[task_name][metric + "_stderr"] = stderr(items)
+
+    # Make a new directory called 'individual_results'
+    if not os.path.exists("ind_aggrzcp_res"):
+        os.makedirs("ind_aggrzcp_res")
+    # Save as a new row to 'overall_results.csv' file
+    # with open("zcp_execution_results.csv", "a") as f:
+    # generate a random integer between 0 and 10000000000 , make sure it is unseeded
+    state = random.getstate()
+    random.seed()
+    run_id = random.randint(0, 10000000000)
+    random.setstate(state)
+    with open(f"ind_aggrzcp_res/{run_id}_zcpaggr_result.csv", "w") as f:
+        f.write(f"{run_descr}\n")
+    results[task_name][metric] = task.aggregation()[real_metric](items)
 
     return {"results": dict(results), "versions": dict(versions)}
 

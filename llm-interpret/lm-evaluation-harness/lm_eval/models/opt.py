@@ -53,6 +53,7 @@ class HFLM(BaseLM):
     def __init__(
         self,
         device="cuda",
+        zcp_calc=None,
         pretrained="facebook/opt-125m",
         revision="main",
         subfolder=None,
@@ -149,14 +150,18 @@ class HFLM(BaseLM):
         if int(mask_heads):
             with open(head_importance_path, 'rb') as f:
                 importance = pickle.load(f)
-            _, head_indices = torch.sort(importance.view(-1))
-            head_indices = list(head_indices.numpy())
-            head_indices = head_indices[: int(head_percent_mask) * len(head_indices) // 100]
-            self.head_mask[head_indices] = 0. 
+            if "oracle" in head_importance_path:
+                self.head_mask = np.asarray(importance.tolist())
+            else:
+                _, head_indices = torch.sort(importance.view(-1))
+                head_indices = list(head_indices.numpy())
+                head_indices = head_indices[: int(head_percent_mask) * len(head_indices) // 100]
+                self.head_mask[head_indices] = 0. 
         elif int(mask_single_head): #Only performing it on OPT125M
             self.head_mask[int(mask_single_head)-1] = 0.
-
-        self.head_mask = self.head_mask.view(num_hidden_layers, num_heads).contiguous()
+        self.head_mask = torch.Tensor(self.head_mask).view(num_hidden_layers, num_heads).contiguous()
+        # Change its type to half
+        self.head_mask = self.head_mask.half()
         
         if mask_fc:
             self.fc_mask[int(mask_fc)] = 0.
