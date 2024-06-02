@@ -31,13 +31,16 @@ parser.add_argument("--rerun", action="store_true", help="rerun the model")
 args = parser.parse_args()
 
 
-dpath_style = args.emb_style if args.emb_style != "b1e_seq" else f"{args.emb_style}_{0}"
+dpath_style = args.emb_style if args.emb_style != "b1e_seq" else f"{args.emb_style}_fc1_{0}"
 if os.path.exists(f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/{dpath_style}.pt') and not args.rerun:
     # Write to file "already_done.log" which model exists
     with open("already_done.log", "a") as f:
         f.write(f"pred_models_{args.basemodel.split('-')[-1]}/{args.zcp_metric}/{args.dataset}/{dpath_style}.pt\n")
     exit(0)
-
+else:
+    with open("not_done.log", "a") as f:
+        f.write(f"pred_models_{args.basemodel.split('-')[-1]}/{args.zcp_metric}/{args.dataset}/{dpath_style}.pt\n")
+        
 class BLEPredModel(nn.Module):
     def __init__(self, embedding_dim=2048, output_dim=16):
         super(BLEPredModel, self).__init__()
@@ -59,21 +62,20 @@ class BLEPredModel(nn.Module):
         return x
 
 
-class B1EPredModel(nn.Module):
+class B1EPredModelFFN(nn.Module):
     def __init__(self, embedding_dim=2048, output_dim=16):
-        super(B1EPredModel, self).__init__()
+        super(B1EPredModelFFN, self).__init__()
         self.fc1 = nn.Linear(embedding_dim, 2048)
         self.fc2 = nn.Linear(2048, output_dim)
 
     def forward(self, x):
-        x = F.relu(self.fc1(x.squeeze()))
+        x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return x
 
-
-class B1ESeqPredModel(nn.Module):
+class B1ESeqPredModelFFN(nn.Module):
     def __init__(self, embedding_dim=2048, output_dim=16):
-        super(B1ESeqPredModel, self).__init__()
+        super(B1ESeqPredModelFFN, self).__init__()
         self.fc1 = nn.Linear(embedding_dim, 2048)
         self.fc2 = nn.Linear(2048, output_dim)
 
@@ -91,7 +93,7 @@ class B1ESequenceDataset(Dataset):
         input_matrix = self.data[idx][1][0].squeeze()  # [E]
         # Normalize to 0-1
         input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
-        target_activations = self.data[idx][2].flatten()  # [1, N*H]
+        target_activations = self.data[idx][3].flatten()  # [1, N*H]
         # Normalize to 0-1
         target_activations = (target_activations - target_activations.min()) / (target_activations.max() - target_activations.min())
         return input_matrix.float(), torch.tensor(target_activations, dtype=torch.float)
@@ -106,7 +108,7 @@ class B1ESeqSequenceDataset(Dataset):
         input_matrix = self.data[idx][1][self.seqlayer].squeeze()  # [E]
         # Normalize to 0-1
         input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
-        target_activations = self.data[idx][2][self.seqlayer].flatten()  # [1, N*H]
+        target_activations = self.data[idx][3][self.seqlayer].flatten()  # [1, N*H]
         target_activations = (target_activations - target_activations.min()) / (target_activations.max() - target_activations.min())
         return input_matrix.float(), torch.tensor(target_activations, dtype=torch.float)
         
@@ -123,7 +125,7 @@ class FSeqSequenceDataset(Dataset):
         raise NotImplementedError("This is DISABLED. regenerate traces after removing [:, -1, :] from context_layer_val writes to first_embedding in base.py!")
         # Normalize to 0-1
         input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
-        target_activations = self.data[idx][2].flatten()  # [1, N*H]
+        target_activations = self.data[idx][3].flatten()  # [1, N*H]
         seq_len = input_matrix.shape[0]
         if seq_len < self.max_seq_len:
             padding = torch.zeros((self.max_seq_len - seq_len, input_matrix.shape[1]))
@@ -140,6 +142,8 @@ with open(base_path + f'./{args.zcp_metric}_trace_{args.dataset_cname}_0.pkl', '
 nlayers = data[0][2].shape[0]
 num_heads = data[0][2].shape[1]
 total_heads = nlayers * num_heads
+num_neurons = data[0][3].shape[1]
+total_neurons = nlayers * num_neurons
 max_seq_len = max([data[k][0].shape[1] for k in data])
 embedding_dim = data[0][1][0].shape[-1]
 
@@ -152,7 +156,7 @@ test_data = datavals[split_idx:]
 #
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 num_epochs = 100
-batch_size = 32
+batch_size = 4
 
 if args.emb_style == 'b1e':
     # Create b1e dataset
@@ -160,7 +164,7 @@ if args.emb_style == 'b1e':
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     b1e_test_dataset = B1ESequenceDataset(test_data)
     test_loader = DataLoader(b1e_test_dataset, batch_size=batch_size, shuffle=False)
-    model = B1EPredModel(embedding_dim=embedding_dim, output_dim=total_heads).to(device)
+    model = B1EPredModelFFN(embedding_dim=embedding_dim, output_dim=total_neurons).to(device)
 elif args.emb_style == 'b1e_seq':
     # Create b1eseq dataset
     b1e_seq_traindict = {}
@@ -170,22 +174,24 @@ elif args.emb_style == 'b1e_seq':
         b1e_seq_testdict[i] = B1ESeqSequenceDataset(test_data, i)
     b1e_seq_train_loader = {k: DataLoader(v, batch_size=batch_size, shuffle=True) for k, v in b1e_seq_traindict.items()}
     b1e_seq_test_loader = {k: DataLoader(v, batch_size=batch_size, shuffle=False) for k, v in b1e_seq_testdict.items()}
-    model_dict = {k: B1ESeqPredModel(embedding_dim=embedding_dim, output_dim=num_heads).to(device) for k in range(nlayers)}
+    model_dict = {k: B1ESeqPredModelFFN(embedding_dim=embedding_dim, output_dim=num_neurons).to(device) for k in range(nlayers)}
 elif args.emb_style == 'ble':
     # Create fseq dataset
     train_dataset = FSeqSequenceDataset(train_data, max_seq_len)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_dataset = FSeqSequenceDataset(test_data, max_seq_len)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    model = BLEPredModel(embedding_dim=embedding_dim, output_dim=total_heads).to(device)
+    model = BLEPredModel(embedding_dim=embedding_dim, output_dim=total_neurons).to(device)
 else:
     raise ValueError("Invalid emb_style")
 
 # make directory structure pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/ if it doesnt exist
 if not os.path.exists(f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}'):
     os.makedirs(f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}')
+
+dpath_style = args.emb_style if args.emb_style != "b1e_seq" else f"{args.emb_style}_fc1_{0}"
+
 # Load model from state dict if it exists with name "pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/{args.emb_style}.pt"
-dpath_style = args.emb_style if args.emb_style != "b1e_seq" else f"{args.emb_style}_{0}"
 if os.path.exists(f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/{dpath_style}.pt') and not args.rerun:
     model.load_state_dict(torch.load(f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/{dpath_style}.pt'))
 else:
@@ -255,10 +261,13 @@ else:
         with open(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv', 'a') as f:
             f.write(f"{args.dataset},{args.zcp_metric},{args.emb_style},{test_loss},{tau}\n")
         # Save predictor
-        torch.save(model.state_dict(), f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/{args.emb_style}.pt')
+        torch.save(model.state_dict(), f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/{args.emb_style}_fc1.pt')
     elif args.emb_style == "b1e_seq":
         datapointwise_order = {idx: [[], []] for idx, (_, _) in enumerate(b1e_seq_test_loader[0])} # For each datapoint, construct a N*H order
         for curr_layer in range(nlayers):
+            # skip if curr_layer < 13
+            if curr_layer < 13:
+                continue
             train_loader = b1e_seq_train_loader[curr_layer]
             test_loader = b1e_seq_test_loader[curr_layer]
             model = model_dict[curr_layer]
@@ -314,7 +323,7 @@ else:
             test_loss /= len(test_loader)
             print(f"Test L2 Loss: {test_loss}")
             # Save predictor
-            torch.save(model.state_dict(), f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/{args.emb_style}_{curr_layer}.pt')
+            torch.save(model.state_dict(), f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/{args.emb_style}_fc1_{curr_layer}.pt')
         # Now, calculate the kendall tau for each datapoint (note that each datapoint actually has batch_size datapoints and average it out
         alldp_predorder = []
         alldp_trueorder = []

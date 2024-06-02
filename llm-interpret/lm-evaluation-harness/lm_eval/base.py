@@ -28,7 +28,7 @@ from deap import base, creator, tools, algorithms
 import random
 from deap import tools
 
-fc_metric_calc = False
+fc_metric_calc = True
 
 class SequenceModel(nn.Module):
     def __init__(self, embedding_dim=1024, output_dim=16):
@@ -451,7 +451,7 @@ class BaseLM(LM):
                 izjns += 1
                 if any(izjns > threshold for trial_range, threshold in trial_thresholds.items() if trial.number in trial_range):
                     break
-                # if izjns > 500:
+                # if izjns > 2000:
                 #     break
                 batch_max_length = torch.max(l_ctx + l_cont).item()
                 inp = inp[:, :batch_max_length]
@@ -568,7 +568,7 @@ class BaseLM(LM):
 
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 500:
+            if izjns > 2000:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -584,9 +584,11 @@ class BaseLM(LM):
             ll.backward()
             first_embedding = []
             temp_importance_score = torch.zeros(num_hidden_layers, num_heads)
+            temp_fc1_score = torch.zeros(num_hidden_layers, fc1_neurons)
             for layer in range(num_hidden_layers):
                 # if layer == 0:
-                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val)
+                # if layer==0: 
+                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :])
                 self_attention = self.opt.get_decoder().layers[layer].self_attn
                 mask_gradient = self_attention.stored_gradients
                 if fc_metric_calc:
@@ -597,6 +599,7 @@ class BaseLM(LM):
                     snip_fc1_info = torch.sum(torch.abs(fc1_mask_gradient), dim=0).squeeze()
                     snip_fc2_info = torch.sum(torch.abs(fc2_mask_gradient), dim=0).squeeze()
                     fc1_importance_score[layer] += snip_fc1_info.detach().cpu()
+                    temp_fc1_score[layer] += snip_fc1_info.detach().cpu()
                     fc2_importance_score[layer] += snip_fc2_info.detach().cpu()
                 mask_gradient = rearrange(mask_gradient, 'b l (h d) -> b l h d', h=num_heads)
                 snip_info = torch.sum(torch.abs(mask_gradient), dim=1).sum(dim=-1).squeeze()
@@ -605,7 +608,7 @@ class BaseLM(LM):
                 temp_importance_score[layer] = snip_info.detach().cpu()
             
             if method == "predictor":
-                encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score)
+                encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score, temp_fc1_score)
                 tracker += 1
             ## helps in reducing the memory footprint
             self.opt.zero_grad()
@@ -629,8 +632,8 @@ class BaseLM(LM):
         if fc_metric_calc:
             with open(base_path + f'/fc1_snip_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
                 pickle.dump(fc1_importance_score, f)
-            with open(base_path + f'/fc2_snip_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
-                pickle.dump(fc2_importance_score, f)
+            # with open(base_path + f'/fc2_snip_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            #     pickle.dump(fc2_importance_score, f)
         return importance_score
 
     def calculate_plainact(self, dataloader, method="NA", task="NA", num_fewshot=0):
@@ -650,7 +653,7 @@ class BaseLM(LM):
         tracker = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 500:
+            if izjns > 2000:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -666,9 +669,11 @@ class BaseLM(LM):
             ll.backward()
             first_embedding = []
             temp_importance_score = torch.zeros(num_hidden_layers, num_heads)
+            temp_fc1_score = torch.zeros(num_hidden_layers, fc1_neurons)
             for layer in range(num_hidden_layers):
                 # if layer == 0:
-                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val)
+                # if layer==0: 
+                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :])
                 self_attention = self.opt.get_decoder().layers[layer].self_attn
                 attn_x = self_attention.context_layer_val
                 grad_attn_x = self_attention.context_layer_val_grad
@@ -681,17 +686,18 @@ class BaseLM(LM):
                 dim = attn_x.shape[-1]
                 attn_x, grad_attn_x = map(lambda x: rearrange(x, 'b l (h d) -> b h l d', h=num_heads, d=dim//num_heads), (attn_x, grad_attn_x)) # shape = bs, num_heads, seq_len, dim_per_head
                 plainact_info = torch.einsum("bhli,bhli->bhl", [grad_attn_x, attn_x]).to('cpu') # not all layers are on the same device hence make sure dot is on the self.device
-                importance_score[layer] += plainact_info.abs().sum(-1).sum(0).detach() # [num_layers, num_heads]
-                temp_importance_score[layer] += plainact_info.abs().sum(-1).sum(0).detach()
+                importance_score[layer] += plainact_info.abs().sum(-1).sum(0).cpu().detach() # [num_layers, num_heads]
+                temp_importance_score[layer] += plainact_info.abs().sum(-1).sum(0).cpu().detach()
                 
                 if fc_metric_calc:
                     plainact_f1info = fc1_weight_grad * fc1_weight
-                    fc1_importance_score[layer] += plainact_f1info.abs().sum(-1).cpu()
+                    fc1_importance_score[layer] += plainact_f1info.abs().sum(-1).cpu().detach()
+                    temp_fc1_score[layer] = plainact_f1info.abs().sum(-1).cpu().detach()
                     plainact_f2info = fc2_weight_grad * fc2_weight
-                    fc2_importance_score[layer] += plainact_f2info.abs().sum(-1).cpu()
+                    fc2_importance_score[layer] += plainact_f2info.abs().sum(-1).cpu().detach()
             if method == "predictor":
                 # [1, L, E] --> Predictor --> [1, N * H]\
-                encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score)
+                encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score, temp_fc1_score)
                 tracker += 1
             ## helps in reducing the memory footprint
             self.opt.zero_grad()
@@ -720,8 +726,8 @@ class BaseLM(LM):
         if fc_metric_calc:
             with open(base_path + f'/fc1_plainact_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
                 pickle.dump(fc1_importance_score, f)
-            with open(base_path + f'/fc2_plainact_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
-                pickle.dump(fc2_importance_score, f)
+            # with open(base_path + f'/fc2_plainact_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            #     pickle.dump(fc2_importance_score, f)
         return importance_score
     
     def calculate_nwot(self, dataloader, method="NA", task="NA", num_fewshot=0):
@@ -745,9 +751,9 @@ class BaseLM(LM):
         tracker = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 500:
+            if izjns > 2000:
                 break
-            # if izjns > 500:
+            # if izjns > 2000:
             #     break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -762,9 +768,11 @@ class BaseLM(LM):
             token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")
             first_embedding = []
             temp_importance_score = torch.zeros(num_hidden_layers, num_heads)
+            temp_fc1_score = torch.zeros(num_hidden_layers, fc1_neurons)
             for layer in range(num_hidden_layers):
                 # if layer == 0:
-                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val)
+                # if layer==0: 
+                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :])
                 self_attention = self.opt.get_decoder().layers[layer].self_attn
                 attn_x = self_attention.context_layer_val
                 attn_x = rearrange(attn_x, 'b l (h d) -> b l h d', h=num_heads)
@@ -795,6 +803,7 @@ class BaseLM(LM):
                         K_value = K_fc1[n_]
                         if K_value > 0:
                             fc1_importance_score[layer, n_] += np.log(K_value)
+                            temp_fc1_score[layer, n_] += np.log(K_value)
                         else:
                             fc1_importance_score[layer, n_] += -np.inf
                     for n_ in range(fc2_neurons):
@@ -806,7 +815,7 @@ class BaseLM(LM):
 
             
             if method == "predictor":
-                encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score)
+                encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score, temp_fc1_score)
                 tracker += 1
             ## helps in reducing the memory footprint
             self.opt.zero_grad()
@@ -833,8 +842,8 @@ class BaseLM(LM):
         if fc_metric_calc:
             with open(base_path + f'/fc1_nwot_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
                 pickle.dump(fc1_importance_score, f)
-            with open(base_path + f'/fc2_nwot_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
-                pickle.dump(fc2_importance_score, f)
+            # with open(base_path + f'/fc2_nwot_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            #     pickle.dump(fc2_importance_score, f)
         return importance_score
 
     def calculate_l2_norm(self, dataloader, method="NA", task="NA", num_fewshot=0):
@@ -845,6 +854,7 @@ class BaseLM(LM):
         num_hidden_layers = self.opt.config.num_hidden_layers
         num_heads = self.opt.config.num_attention_heads
         tot_tokens, eff_tokens = 0, 0
+        fc_metric_calc = hasattr(self.opt.get_decoder().layers[0], 'fc1') and hasattr(self.opt.get_decoder().layers[0], 'fc2')
         if fc_metric_calc:
             fc1_neurons = self.opt.get_decoder().layers[0].fc1.out_features
             fc2_neurons = self.opt.get_decoder().layers[0].fc2.out_features
@@ -858,70 +868,151 @@ class BaseLM(LM):
         tracker = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 200:
+            if izjns > 2000:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
-            attn_mask = torch.ones((len(l_ctx), batch_max_length), dtype=torch.long)
-            labels = torch.empty((len(l_ctx), batch_max_length), dtype=torch.long).fill_(-100.)
+            attn_mask = torch.ones((len(l_ctx), batch_max_length), dtype=torch.long, device=self.device)
+            labels = torch.empty((len(l_ctx), batch_max_length), dtype=torch.long, device=self.device).fill_(-100)
             for i in range(len(l_ctx)):
-                attn_mask[i][l_ctx[i]+l_cont[i]:] = torch.zeros(batch_max_length - (l_ctx[i]+l_cont[i]))
+                attn_mask[i][l_ctx[i]+l_cont[i]:] = torch.zeros(batch_max_length - (l_ctx[i]+l_cont[i]), device=self.device)
                 labels[i][l_ctx[i]: l_ctx[i] + l_cont[i]] = inp[i][l_ctx[i]:l_ctx[i]+l_cont[i]]
-                tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
-                eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
-            ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
-            token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")
-            first_embedding = []
-            temp_importance_score = torch.zeros(num_hidden_layers, num_heads)
-            for layer in range(num_hidden_layers):
-                # if layer == 0:
-                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val)
-                self_attention = self.opt.get_decoder().layers[layer].self_attn
-                
-                if fc_metric_calc:
-                    fc1_output_act = self.opt.get_decoder().layers[layer].fc1_output
-                    fc2_output_act = self.opt.get_decoder().layers[layer].fc2_output
-                attn_x = self_attention.context_layer_val
-                attn_x = rearrange(attn_x, 'b l (h d) -> b l h d', h=num_heads)
-                l2_norm_info = attn_x.norm(dim=0).norm(dim=0).norm(dim=-1)
-                importance_score[layer] += l2_norm_info.cpu()
-                temp_importance_score[layer] = l2_norm_info.cpu()
-                
-                if fc_metric_calc:
-                    fc1_importance_score[layer] += fc1_output_act.norm(dim=0).cpu()
-                    fc2_importance_score[layer] += fc2_output_act.norm(dim=0).cpu()
-            if method == "predictor":
-                encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score)
-                tracker += 1
-            ## helps in reducing the memory footprint
+                tot_tokens += attn_mask[i].float().sum().item() - 1
+                eff_tokens += (labels[i] != -100).sum().item()
+            
+            with torch.no_grad():
+                ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
+                token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().cpu()
+                first_embedding = []
+                temp_importance_score = torch.zeros(num_hidden_layers, num_heads, device=self.device)
+                temp_fc1_score = torch.zeros(num_hidden_layers, fc1_neurons) if fc_metric_calc else None
+                for layer in range(num_hidden_layers):
+                    first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :])
+                    self_attention = self.opt.get_decoder().layers[layer].self_attn
+                    if fc_metric_calc:
+                        fc1_output_act = self.opt.get_decoder().layers[layer].fc1_output
+                        fc2_output_act = self.opt.get_decoder().layers[layer].fc2_output
+                    attn_x = self_attention.context_layer_val
+                    attn_x = rearrange(attn_x, 'b l (h d) -> b l h d', h=num_heads)
+                    l2_norm_info = attn_x.norm(dim=0).norm(dim=0).norm(dim=-1).cpu().detach()
+                    importance_score[layer] += l2_norm_info
+                    temp_importance_score[layer] = l2_norm_info
+                    del attn_x, l2_norm_info  # Free memory
+                    if fc_metric_calc:
+                        fc1_importance_score[layer] += fc1_output_act.norm(dim=0).cpu().detach()
+                        temp_fc1_score[layer] += fc1_output_act.norm(dim=0).cpu().detach()
+                        fc2_importance_score[layer] += fc2_output_act.norm(dim=0).cpu().detach()
+                        del fc1_output_act, fc2_output_act  # Free memory
+                if method == "predictor":
+                    encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score.cpu(), temp_fc1_score.cpu() if fc_metric_calc else None)
+                    tracker += 1
+            
             self.opt.zero_grad()
-            del attn_x, ll, l2_norm_info
-            
-            if fc_metric_calc:
-                del fc1_output_act, fc2_output_act
-            for param in self.opt.parameters():
-                param.grad = None
-            
+            torch.cuda.empty_cache()  # Clear the cache to free up memory
+
         # Save it as 'epenas' + task.DATASET_PATH + str(num_fewshot) + '.pkl' in a new directory called 'zcps/' + self.opt.config._name_or_path.replace("facebook/", "") + "/"
         model_name = self.opt.config._name_or_path.replace("facebook/", "")
         if not os.path.exists(f'zcps'):
             os.makedirs(f'zcps')
         base_path = f'zcps/{model_name}'
-        # ensure base_path exists?
         if not os.path.exists(base_path):
             os.makedirs(base_path)
         with open(base_path + f'/l2_norm_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
-            pickle.dump(importance_score, f)
+            pickle.dump(importance_score.cpu(), f)
             
         if method == "predictor":
             with open(base_path + f'/l2_norm_trace_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
                 pickle.dump(encoding_dict, f)
         if fc_metric_calc:
             with open(base_path + f'/fc1_l2_norm_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
-                pickle.dump(fc1_importance_score, f)
-            with open(base_path + f'/fc2_l2_norm_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
-                pickle.dump(fc2_importance_score, f)
-        return importance_score
+                pickle.dump(fc1_importance_score.cpu(), f)
+            # with open(base_path + f'/fc2_l2_norm_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            #     pickle.dump(fc2_importance_score.cpu(), f)
+        return importance_score.cpu()
+    # def calculate_l2_norm(self, dataloader, method="NA", task="NA", num_fewshot=0):
+    #     """
+    #     For EPE-NAS, we need to go through each item in data loader
+    #     For EACH layer AND HEAD, have a dictionary mapping the class to all jacobians.
+    #     """
+    #     num_hidden_layers = self.opt.config.num_hidden_layers
+    #     num_heads = self.opt.config.num_attention_heads
+    #     tot_tokens, eff_tokens = 0, 0
+    #     if fc_metric_calc:
+    #         fc1_neurons = self.opt.get_decoder().layers[0].fc1.out_features
+    #         fc2_neurons = self.opt.get_decoder().layers[0].fc2.out_features
+    #     self.opt.eval()
+    #     importance_score = torch.zeros(num_hidden_layers, num_heads)
+    #     if fc_metric_calc:
+    #         fc1_importance_score = torch.zeros(num_hidden_layers, fc1_neurons)
+    #         fc2_importance_score = torch.zeros(num_hidden_layers, fc2_neurons)
+    #     izjns = 0
+    #     encoding_dict = {}
+    #     tracker = 0
+    #     for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
+    #         izjns += 1
+    #         if izjns > 2000:
+    #             break
+    #         batch_max_length = torch.max(l_ctx + l_cont).item()
+    #         inp = inp[:, :batch_max_length]
+    #         attn_mask = torch.ones((len(l_ctx), batch_max_length), dtype=torch.long)
+    #         labels = torch.empty((len(l_ctx), batch_max_length), dtype=torch.long).fill_(-100.)
+    #         for i in range(len(l_ctx)):
+    #             attn_mask[i][l_ctx[i]+l_cont[i]:] = torch.zeros(batch_max_length - (l_ctx[i]+l_cont[i]))
+    #             labels[i][l_ctx[i]: l_ctx[i] + l_cont[i]] = inp[i][l_ctx[i]:l_ctx[i]+l_cont[i]]
+    #             tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
+    #             eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
+    #         ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
+    #         token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")
+    #         first_embedding = []
+    #         temp_importance_score = torch.zeros(num_hidden_layers, num_heads)
+    #         temp_fc1_score = torch.zeros(num_hidden_layers, fc1_neurons)
+    #         for layer in range(num_hidden_layers):
+    #             # if layer==0: 
+    #             first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :])
+    #             self_attention = self.opt.get_decoder().layers[layer].self_attn
+    #             if fc_metric_calc:
+    #                 fc1_output_act = self.opt.get_decoder().layers[layer].fc1_output
+    #                 fc2_output_act = self.opt.get_decoder().layers[layer].fc2_output
+    #             attn_x = self_attention.context_layer_val
+    #             attn_x = rearrange(attn_x, 'b l (h d) -> b l h d', h=num_heads)
+    #             l2_norm_info = attn_x.norm(dim=0).norm(dim=0).norm(dim=-1)
+    #             importance_score[layer] += l2_norm_info.cpu()
+    #             temp_importance_score[layer] = l2_norm_info.cpu()
+    #             del attn_x, l2_norm_info  # Free memory
+    #             if fc_metric_calc:
+    #                 fc1_importance_score[layer] += fc1_output_act.norm(dim=0).cpu()
+    #                 temp_fc1_score[layer] += fc1_output_act.norm(dim=0).cpu()
+    #                 fc2_importance_score[layer] += fc2_output_act.norm(dim=0).cpu()
+    #                 del fc1_output_act, fc2_output_act  # Free memory
+    #         if method == "predictor":
+    #             encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score, temp_fc1_score)
+    #             tracker += 1
+    #         self.opt.zero_grad()
+    #         del ll  # Free memory
+    #         for param in self.opt.parameters():
+    #             param.grad = None
+    #         torch.cuda.empty_cache()  # Clear the cache to free up memory
+            
+    #     # Save it as 'epenas' + task.DATASET_PATH + str(num_fewshot) + '.pkl' in a new directory called 'zcps/' + self.opt.config._name_or_path.replace("facebook/", "") + "/"
+    #     model_name = self.opt.config._name_or_path.replace("facebook/", "")
+    #     if not os.path.exists(f'zcps'):
+    #         os.makedirs(f'zcps')
+    #     base_path = f'zcps/{model_name}'
+    #     # ensure base_path exists?
+    #     if not os.path.exists(base_path):
+    #         os.makedirs(base_path)
+    #     with open(base_path + f'/l2_norm_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+    #         pickle.dump(importance_score, f)
+            
+    #     if method == "predictor":
+    #         with open(base_path + f'/l2_norm_trace_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+    #             pickle.dump(encoding_dict, f)
+    #     if fc_metric_calc:
+    #         with open(base_path + f'/fc1_l2_norm_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+    #             pickle.dump(fc1_importance_score, f)
+    #         # with open(base_path + f'/fc2_l2_norm_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+    #         #     pickle.dump(fc2_importance_score, f)
+    #     return importance_score
     
 
     def calculate_jacov(self, dataloader, method="NA", task="NA", num_fewshot=0):
@@ -939,7 +1030,7 @@ class BaseLM(LM):
         perhead_class_jacobians = {"l_{}".format(i): {"h_{}".format(h): [] for h in range(num_heads)} for i in range(num_hidden_layers)}
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 500:
+            if izjns > 2000:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -974,13 +1065,26 @@ class BaseLM(LM):
                 jacobians = torch.stack(perhead_class_jacobians["l_{}".format(layer)]["h_{}".format(head)], dim=0).cpu()
                 # remove wherever jacobians.sum(dim=-1) == 0
                 jacobians = jacobians[jacobians.sum(dim=-1) != 0]
-                corrs = np.corrcoef(jacobians)
-                v, _ = np.linalg.eig(corrs)
-                v = np.abs(v)
-                k = 1e-5
-                jc = -np.sum(np.log(v + k) + 1.0 / (v + k))
+                subsample_size = 500
+                # Randomly sample 100 jacobians
+                jc_values = []
+                for _ in range(5):
+                    subsample = jacobians[torch.randperm(jacobians.shape[0])[:subsample_size]]
+                    corrs = np.corrcoef(subsample)
+                    v, _ = np.linalg.eig(corrs)
+                    v = np.abs(v)
+                    k = 1e-5
+                    jc = -np.sum(np.log(v + k) + 1.0 / (v + k))
+                    jc_values.append(jc)
+                avg_jc = np.mean(jc_values)
+                # import pdb; pdb.set_trace()
+                # corrs = np.corrcoef(jacobians)
+                # v, _ = np.linalg.eig(corrs)
+                # v = np.abs(v)
+                # k = 1e-5
+                # jc = -np.sum(np.log(v + k) + 1.0 / (v + k))
                 # If a complex number comes, just try v = np.abs(v) or corrs += np.eye(corrs.shape[0]) * k
-                importance_score[layer, head] += jc
+                importance_score[layer, head] += avg_jc
         # Save it as 'epenas' + task.DATASET_PATH + str(num_fewshot) + '.pkl' in a new directory called 'zcps/' + self.opt.config._name_or_path.replace("facebook/", "") + "/"
         model_name = self.opt.config._name_or_path.replace("facebook/", "")
         if not os.path.exists(f'zcps'):
@@ -1015,7 +1119,7 @@ class BaseLM(LM):
         tracker = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 500:
+            if izjns > 2000:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -1039,10 +1143,12 @@ class BaseLM(LM):
             ll.backward(create_graph=True)
             z = 0
             temp_importance_score = torch.zeros(num_hidden_layers, num_heads)
+            temp_fc1_score = torch.zeros(num_hidden_layers, fc1_neurons)
             first_embedding = []
             for layer in range(num_hidden_layers):
                 # if layer == 0:
-                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val)
+                # if layer==0: 
+                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :])
                 self_attention = self.opt.get_decoder().layers[layer].self_attn
                 num_heads = self_attention.num_heads
                 grad_attn_x = self_attention.context_layer_val_grad
@@ -1078,9 +1184,10 @@ class BaseLM(LM):
                 temp_importance_score[layer] += self_attn_metrics.detach().cpu()
                 if fc_metric_calc:
                     fc1_importance_score[layer] += fc1_metrics.detach().cpu()
+                    temp_fc1_score[layer] += fc1_metrics.detach().cpu()
                     fc2_importance_score[layer] += fc2_metrics.detach().cpu()
             if method == "predictor":
-                encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score)
+                encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score, temp_fc1_score)
                 tracker += 1
             ## helps in reducing the memory footprint
             self.opt.zero_grad()
@@ -1105,8 +1212,8 @@ class BaseLM(LM):
         if fc_metric_calc:
             with open(base_path + f'/grasp_fc1_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
                 pickle.dump(fc1_importance_score, f)
-            with open(base_path + f'/grasp_fc2_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
-                pickle.dump(fc2_importance_score, f)
+            # with open(base_path + f'/grasp_fc2_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            #     pickle.dump(fc2_importance_score, f)
         return importance_score
 
     def calculate_grad_norm(self, dataloader, method="NA", task="NA", num_fewshot=0):
@@ -1130,7 +1237,7 @@ class BaseLM(LM):
         tracker = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 500:
+            if izjns > 2000:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -1145,10 +1252,12 @@ class BaseLM(LM):
             token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")
             ll.backward()
             temp_importance_score = torch.zeros(num_hidden_layers, num_heads)
+            temp_fc1_score = torch.zeros(num_hidden_layers, fc1_neurons)
             first_embedding = []
             for layer in range(num_hidden_layers):
                 # if layer == 0:
-                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val)
+                # if layer==0: 
+                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :])
                 self_attention = self.opt.get_decoder().layers[layer].self_attn
                 attn_x = self_attention.context_layer_val
                 grad_attn_x = self_attention.context_layer_val_grad  
@@ -1162,11 +1271,12 @@ class BaseLM(LM):
                 if fc_metric_calc:
                     fc1_grad_norm_info = fc1_weight_grad.norm(dim=-1)
                     fc1_importance_score[layer] += fc1_grad_norm_info.cpu().detach()
+                    temp_fc1_score[layer] = fc1_grad_norm_info.cpu().detach()
                     fc2_grad_norm_info = fc2_weight_grad.norm(dim=-1)
                     fc2_importance_score[layer] += fc2_grad_norm_info.cpu().detach()
             
             if method == "predictor":
-                encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score)
+                encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score, temp_fc1_score)
                 tracker += 1
             ## helps in reducing the memory footprint
             self.opt.zero_grad()
@@ -1192,8 +1302,8 @@ class BaseLM(LM):
         if fc_metric_calc:
             with open(base_path + f'/fc1_grad_norm_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
                 pickle.dump(fc1_importance_score, f)
-            with open(base_path + f'/fc2_grad_norm_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
-                pickle.dump(fc2_importance_score, f)
+            # with open(base_path + f'/fc2_grad_norm_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            #     pickle.dump(fc2_importance_score, f)
         return importance_score
     
 
@@ -1217,7 +1327,7 @@ class BaseLM(LM):
         izjns = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 500:
+            if izjns > 2000:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -1233,9 +1343,11 @@ class BaseLM(LM):
             ll.backward()
             first_embedding = []
             temp_importance_score = torch.zeros(num_hidden_layers, num_heads)
+            temp_fc1_score = torch.zeros(num_hidden_layers, fc1_neurons)
             for layer in range(num_hidden_layers):
                 # if layer == 0:
-                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val)
+                # if layer==0: 
+                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :])
                 self_attention = self.opt.get_decoder().layers[layer].self_attn
                 attn_x = self_attention.context_layer_val
                 grad_attn_x = self_attention.context_layer_val_grad
@@ -1260,6 +1372,7 @@ class BaseLM(LM):
                 if fc_metric_calc:
                     fc1_fisher_info = (fc1_output_act * fc1_output_act_grad).pow(2).mean(dim=[0])
                     fc1_importance_score[layer] += fc1_fisher_info.cpu().detach()
+                    temp_fc1_score[layer] += fc1_fisher_info.cpu().detach()
                     fc2_fisher_info = (fc2_output_act * fc2_output_act_grad).pow(2).mean(dim=[0])
                     fc2_importance_score[layer] += fc2_fisher_info.cpu().detach()
             ## helps in reducing the memory footprint
@@ -1271,7 +1384,7 @@ class BaseLM(LM):
                 param.grad = None
             
             if method == "predictor":
-                encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score)
+                encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score, temp_fc1_score)
                 tracker += 1
         # Save it as 'epenas' + task.DATASET_PATH + str(num_fewshot) + '.pkl' in a new directory called 'zcps/' + self.opt.config._name_or_path.replace("facebook/", "") + "/"
         model_name = self.opt.config._name_or_path.replace("facebook/", "")
@@ -1289,8 +1402,8 @@ class BaseLM(LM):
         if fc_metric_calc:
             with open(base_path + f'/fc1_fisher_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
                 pickle.dump(fc1_importance_score, f)
-            with open(base_path + f'/fc2_fisher_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
-                pickle.dump(fc2_importance_score, f)
+            # with open(base_path + f'/fc2_fisher_{task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH}_{num_fewshot}.pkl', 'wb') as f:
+            #     pickle.dump(fc2_importance_score, f)
         return importance_score
     
 
@@ -1308,7 +1421,7 @@ class BaseLM(LM):
         izjns = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 500:
+            if izjns > 2000:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -1328,6 +1441,7 @@ class BaseLM(LM):
 
                 dim = attn_x.shape[-1]
                 attn_x, grad_attn_x = map(lambda x: rearrange(x, 'b l (h d) -> b l h d', h=num_heads, d=dim//num_heads), (attn_x, grad_attn_x))
+
                 # Now, grad_attn_x is of shape [1, seq_len, num_heads, dim_per_head]
                 # populate perlayer_class_jacobians with the jacobians, using label of seq_len as key, layer and head from num_heads as key
                 for h_ in range(num_heads):
@@ -1335,9 +1449,9 @@ class BaseLM(LM):
                         lab = lab.item()
                         if lab != -100.:
                             if lab in perlayer_class_jacobians["l_{}".format(layer)]["h_{}".format(h_)]:
-                                perlayer_class_jacobians["l_{}".format(layer)]["h_{}".format(h_)][lab] = np.vstack((perlayer_class_jacobians["l_{}".format(layer)]["h_{}".format(h_)][lab], grad_attn_x[0, lab_ix, h_, :].detach().cpu().numpy().tolist()))
+                                perlayer_class_jacobians["l_{}".format(layer)]["h_{}".format(h_)][lab] = np.vstack((perlayer_class_jacobians["l_{}".format(layer)]["h_{}".format(h_)][lab], grad_attn_x[0, lab_ix-1, h_, :].detach().cpu().numpy().tolist()))
                             else:
-                                perlayer_class_jacobians["l_{}".format(layer)]["h_{}".format(h_)][lab] = [grad_attn_x[0, lab_ix, h_, :].detach().cpu().numpy().tolist()]
+                                perlayer_class_jacobians["l_{}".format(layer)]["h_{}".format(h_)][lab] = [grad_attn_x[0, lab_ix-1, h_, :].detach().cpu().numpy().tolist()]
             ## helps in reducing the memory footprint
             self.opt.zero_grad()
             del attn_x, grad_attn_x, ll

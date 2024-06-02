@@ -61,8 +61,6 @@ def pattern_match(patterns, source_list):
 def main():
     args = parse_args()
 
-    assert not args.provide_description  # not implemented
-
     if args.limit:
         print(
             "WARNING: --limit SHOULD ONLY BE USED FOR TESTING. REAL METRICS SHOULD NOT BE COMPUTED USING LIMIT."
@@ -74,6 +72,27 @@ def main():
         task_names = pattern_match(args.tasks.split(","), tasks.ALL_TASKS)
 
     print(f"Selected Tasks: {task_names}")
+
+
+    assert not args.provide_description  # not implemented
+    if args.head_importance_calc:
+        import lm_eval.tasks
+        task_dict = lm_eval.tasks.get_task_dict(task_names)
+        model_args = args.model_args
+        import lm_eval.models
+        
+        for name, task in task_dict.items():
+            from types import SimpleNamespace
+            nspmodel_args = SimpleNamespace(**{item.split('=')[0]: item.split('=')[1] for item in model_args.split(',')})
+            task_name = task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH
+            org_task_name = name
+            # check if zcps/opt-{model_size}/{zcp_calc}_{task_name}_{num_fewshot}.pkl exists
+            if os.path.exists(f"zcps/opt-1.3b/{nspmodel_args.zcp_calc}_{task_name}_{args.num_fewshot}.pkl"):
+                print("Already calculated for ", task_name, " with ", nspmodel_args.zcp_calc)
+                exit(0)
+            elif os.path.exists(f"zcps/opt-1.3b/{nspmodel_args.zcp_calc}_{org_task_name}_{args.num_fewshot}.pkl"):
+                print("Already calculated for ", org_task_name, " with ", nspmodel_args.zcp_calc)
+                exit(0)
 
     description_dict = {}
     if args.description_dict_path:
