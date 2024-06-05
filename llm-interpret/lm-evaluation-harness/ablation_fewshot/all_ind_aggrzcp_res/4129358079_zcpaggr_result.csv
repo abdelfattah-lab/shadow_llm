@@ -1,0 +1,1 @@
+perlayer,50,fc,False,l2_norm,facebook/opt-1.3b,opt1.3b_checkpoints,opt1.3b_tokenizer,1,zcps/opt-1.3b/l2_norm_piqa_3.pkl,50,original,piqa,wikitext,wikitext,wikitext,384.391709192974,3.043446423132445,1.6057059688183648

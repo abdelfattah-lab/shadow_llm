@@ -102,19 +102,19 @@ def simple_evaluate(
             "description_dict": description_dict,
         }   
     else:
-        if os.path.exists(save_importance_path):
-            with open(save_importance_path, 'rb') as handle:
-                results = pickle.load(handle)
-        else:
-            results = head_importance(
-                lm=lm,
-                task_dict=task_dict,
-                num_fewshot=num_fewshot,
-                description_dict=description_dict,
-                save_importance_path=save_importance_path,
-                method=method,
-                model_args=model_args,
-            )    
+        # if os.path.exists(save_importance_path):
+        #     with open(save_importance_path, 'rb') as handle:
+        #         results = pickle.load(handle)
+        # else:
+        results = head_importance(
+            lm=lm,
+            task_dict=task_dict,
+            num_fewshot=num_fewshot,
+            description_dict=description_dict,
+            save_importance_path=save_importance_path,
+            method=method,
+            model_args=model_args,
+        )    
 
     return results
 
@@ -137,13 +137,21 @@ def head_importance(
     for name, task in task_dict.items():
         print(name)
         print(task)
+        print(model_args)
         split = 'train' if task.has_training_docs() else 'valid' if task.has_validation_docs() else None
         if not split:
             raise RuntimeError("Task has neither train nor validation")
 
         tokenizer = lm.get_tokenizer()
-        dataloader = task.get_dataloader(tokenizer, split, subset_size = 2500, batch_size = lm.batch_size, num_fewshot = num_fewshot)
-    
+        try:
+            dataloader = task.get_dataloader(tokenizer, split, subset_size = 2500, batch_size = lm.batch_size, num_fewshot = num_fewshot)
+        except:
+            try:
+                dataloader = task.get_dataloader(tokenizer, split, batch_size = lm.batch_size, num_fewshot = num_fewshot)
+            except:
+                dataloader = task.get_dataloader(tokenizer, split, batch_size = lm.batch_size)
+
+
         """
         ####### epe_nas #######
         Evaluating their behavior using local linear operators at different data points
@@ -195,68 +203,22 @@ def head_importance(
         ##### zen ######
         
         """
-        # # print("At headimp calc")
-        # # import pdb; pdb.set_trace()
-        # # num_hidden_layers = lm.opt.config.num_hidden_layers
-        # # num_heads = lm.opt.config.num_attention_heads
-        # # measures = ['epenas', 'fisher', 'grad_norm', 'grasp', 'jacov', \
-        # #             'l2_norm', 'nwot', 'plainact', 'snip', 'synflow', 'zen']
-        # # measures = ['epenas', 'fisher', 'grad_norm', 'grasp', 'jacov', \
-        # #             'l2_norm', 'nwot', 'plainact', 'snip', 'oracle_ga']
-        # measures_done = None
-        # # try:
-        # #     import os
-        # #     zcpfiles = os.listdir("zcps/opt-1.3b/")
-        # #     # Get only files relevant to this run
-        # #     zcpfiles = [f for f in zcpfiles if task.DATASET_PATH in f]
-        # #     # Remove FC related files
-        # #     zcpfiles = [f for f in zcpfiles if "fc1_" not in f]
-        # #     zcpfiles = [f for f in zcpfiles if "fc2_" not in f]
-        # #     # Get list of measures only
-        # #     measures_done = [f.replace(".pkl", "").replace("_"+task.DATASET_PATH+"_0", "") for f in zcpfiles]
-        # # except:
-        # #     pass
-        # # measures = ['epenas', 'fisher', 'grad_norm', 'grasp', 'l2_norm', 'nwot', 'plainact', 'snip', 'oracle_ga'] # JACOV DISABLED.
-        # # measures = ['snip', 'nwot', 'oracle_ga', 'plainact', 'l2_norm'] # JACOV DISABLED.
-        # measures = ['oracle_opt']
-        # # measures = ['epenas', 'fisher', 'grad_norm', 'grasp', 'nwot', 'snip', 'oracle_ga'] # JACOV DISABLED. plainact and l2_norm disabled temp.
-        # print("Task: ", task.DATASET_PATH)
-        # print("All measures:", measures)
-        # if measures_done is not None:
-        #     measures = [m for m in measures if m not in measures_done]
-        # print("Measures to be calculated:", measures)
-        # # exit(0)
-        # # importance_dict = {m: torch.zeros(num_hidden_layers, num_heads).to('cpu') for m in measures}
-        # for measure in measures:
-        #     # if measure not in ['epenas', 'fisher', 'grad_norm', 'grasp', 'jacov', \
-        #     #         'l2_norm', 'nwot', 'plainact', 'snip']: # synflow and zen skipped.
-        #     #     continue
-        #     # if measure not in ['oracle_ga']:
-        #     #     continue
-        #     # importance_dict[measure] = lm.calculate_importance(dataloader, method, task, num_fewshot, measure)
-        #     # same as above, but function is lm.calculate_{measure}
-        #     print("Calculating importance for ", measure)
-        #     # importance_dict[measure] = 
-        #     _ = getattr(lm, f'calculate_{measure}')(dataloader, method, task, num_fewshot)
-        #     print(f'Importance for {measure} calculated!!')
-
-
-        # # Calculate base style magnitude
-        # # result = lm.calculate_importance(dataloader, method, task, num_fewshot)     
-
-        # # os.makedirs(os.path.dirname(save_importance_path), exist_ok = True)
-        # # with open(save_importance_path, 'wb') as handle:
-        # #     pickle.dump(result, handle)
-        # #     print('Importance numbers saved!!')
-
-        # # return result
-        
 
         from types import SimpleNamespace
         nspmodel_args = SimpleNamespace(**{item.split('=')[0]: item.split('=')[1] for item in model_args.split(',')})
-        measures = [nspmodel_args.zcp_calc]
-        for measure in measures:
-            _ = getattr(lm, f'calculate_{measure}')(dataloader, method, task, num_fewshot)
+        task_name = task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH
+        org_task_name = name
+        # check if zcps/opt-{model_size}/{zcp_calc}_{task_name}_{num_fewshot}.pkl exists
+        if os.path.exists(f"zcps/opt-1.3b/{nspmodel_args.zcp_calc}_{task_name}_{num_fewshot}.pkl"):
+            print("Already calculated for ", task_name, " with ", nspmodel_args.zcp_calc)
+            continue
+        elif os.path.exists(f"zcps/opt-1.3b/{nspmodel_args.zcp_calc}_{org_task_name}_{num_fewshot}.pkl"):
+            print("Already calculated for ", org_task_name, " with ", nspmodel_args.zcp_calc)
+            continue
+        else:
+            measures = [nspmodel_args.zcp_calc]
+            for measure in measures:
+                _ = getattr(lm, f'calculate_{measure}')(dataloader, method, task, num_fewshot)
         return _
 
 @positional_deprecated
@@ -367,8 +329,8 @@ def evaluate(
         # Here, we should limit requests to the latter 70% of the data-set.
         for doc_id, doc in enumerate(itertools.islice(task_docs, 0, limit)):
 
-            if total_requests >= limit_requests:
-                break  # Stop processing if the limit is reached
+            # if total_requests >= limit_requests:
+            #     break  # Stop processing if the limit is reached
 
             if decontaminate and task.should_decontaminate():
                 docs_for_decontamination[(task_name, task_set)].append(
@@ -440,7 +402,14 @@ def evaluate(
 
     from types import SimpleNamespace
     nspmodel_args = SimpleNamespace(**{item.split('=')[0]: item.split('=')[1] for item in model_args.split(',')})
-    run_descr = nspmodel_args.head_importance_path.replace("zcps/opt-1.3b/", "").replace("_0.pkl", "") + "," + str(nspmodel_args.head_percent_mask) + "," + nspmodel_args.predictor_ + "," + nspmodel_args.maskmethod
+    # comma separate EVERY argument of nspmodel_args without modifying
+    run_descr = ",".join([str(item).split("=")[-1] for item in model_args.split(',')]) + ","
+    tasklist = ",".join([str(task_name) for (task_name, _), _ in vals.items()])
+    run_descr += tasklist
+    # if nspmodel_args.predictor_ == "all":
+    #     run_descr = nspmodel_args.head_importance_path.replace("zcps/opt-1.3b/", "").replace("_0.pkl", "") + "," + str(nspmodel_args.head_percent_mask) + "," + task_name + "-all" + "," + nspmodel_args.maskmethod + "," + task_name
+    # else:
+    #     run_descr = nspmodel_args.head_importance_path.replace("zcps/opt-1.3b/", "").replace("_0.pkl", "") + "," + str(nspmodel_args.head_percent_mask) + "," + nspmodel_args.predictor_ + "," + nspmodel_args.maskmethod + "," + task_name
     # aggregate results
     for (task_name, metric), items in vals.items():
         task = task_dict[task_name]
@@ -464,10 +433,15 @@ def evaluate(
 
         #     if stderr is not None:
         #         results[task_name][metric + "_stderr"] = stderr(items)
-
-    # Make a new directory called 'individual_results'
-    if not os.path.exists("ind_aggrzcp_res"):
-        os.makedirs("ind_aggrzcp_res")
+    if nspmodel_args.aggr_all:
+        if not os.path.exists("all_ind_aggrzcp_res"):
+            os.makedirs("all_ind_aggrzcp_res")
+        f_2write = "all_ind_aggrzcp_res"
+    else:
+        # Make a new directory called 'individual_results'
+        if not os.path.exists("ind_aggrzcp_res"):
+            os.makedirs("ind_aggrzcp_res")
+        f_2write = "ind_aggrzcp_res"
     # Save as a new row to 'overall_results.csv' file
     # with open("zcp_execution_results.csv", "a") as f:
     # generate a random integer between 0 and 10000000000 , make sure it is unseeded
@@ -475,7 +449,7 @@ def evaluate(
     random.seed()
     run_id = random.randint(0, 10000000000)
     random.setstate(state)
-    with open(f"ind_aggrzcp_res/{run_id}_zcpaggr_result.csv", "w") as f:
+    with open(f"{f_2write}/{run_id}_zcpaggr_result.csv", "w") as f:
         f.write(f"{run_descr}\n")
     results[task_name][metric] = task.aggregation()[real_metric](items)
 

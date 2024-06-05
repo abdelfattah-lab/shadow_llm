@@ -1,0 +1,1 @@
+perlayer,95,fc,False,grad_norm,facebook/opt-1.3b,opt1.3b_checkpoints,opt1.3b_tokenizer,1,zcps/opt-1.3b/grad_norm_hellaswag_5.pkl,95,original,hellaswag,hellaswag,hellaswag,0.2620991834295957,0.2693686516630153

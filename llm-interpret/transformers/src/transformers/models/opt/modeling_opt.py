@@ -346,7 +346,9 @@ class OPTDecoderLayer(nn.Module):
         if not self.do_layer_norm_before:
             hidden_states = self.self_attn_layer_norm(hidden_states)
 
-        if layer_fc_mask or layer_fc_mask == None:
+        # if layer_fc_mask or layer_fc_mask == None or isinstance(layer_fc_mask, torch.Tensor):
+        if (layer_fc_mask is None) or (isinstance(layer_fc_mask, torch.Tensor) and layer_fc_mask.numel() > 0) or layer_fc_mask:
+
             # Fully Connected
             hidden_states_shape = hidden_states.shape
             hidden_states = hidden_states.reshape(-1, hidden_states.size(-1))
@@ -357,8 +359,13 @@ class OPTDecoderLayer(nn.Module):
                 hidden_states = self.final_layer_norm(hidden_states)
 
             self.fc1_input = hidden_states
+            # prune self.fc1_input here? [L, E]
             hidden_states = self.fc1(hidden_states)
-            self.fc1_output = hidden_states
+            # prune self.hidden_states here? [L, 4E] --> [L, 4E] * [4E binary mask]
+            if isinstance(layer_fc_mask, torch.Tensor):
+                self.fc1_output = hidden_states * layer_fc_mask
+            else:
+                self.fc1_output = hidden_states
 
             hidden_states = self.activation_fn(hidden_states)
 
@@ -577,6 +584,112 @@ class OPTDecoder(OPTPreTrainedModel):
             )
 
         return combined_attention_mask
+    
+    def forward_all_layers(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        head_mask: Optional[torch.Tensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+    ):
+        # Retrieve input_ids and inputs_embeds
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time")
+        elif input_ids is not None:
+            input_shape = input_ids.size()
+            input_ids = input_ids.view(-1, input_shape[-1])
+        elif inputs_embeds is not None:
+            input_shape = inputs_embeds.size()[:-1]
+        else:
+            raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
+
+        past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
+
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+
+        # Embed positions
+        if attention_mask is None:
+            attention_mask = torch.ones(inputs_embeds.shape[:2], dtype=torch.bool, device=inputs_embeds.device)
+        pos_embeds = self.embed_positions(attention_mask, past_key_values_length)
+
+        attention_mask = self._prepare_decoder_attention_mask(
+            attention_mask, input_shape, inputs_embeds, past_key_values_length
+        )
+
+        if self.project_in is not None:
+            inputs_embeds = self.project_in(inputs_embeds)
+
+        hidden_states = inputs_embeds + pos_embeds
+        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+
+        context_layer_vals = []
+
+        # Process each decoder layer
+        for idx, decoder_layer in enumerate(self.layers):
+            layer_outputs = decoder_layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                layer_head_mask=head_mask[idx] if head_mask is not None else None,
+                past_key_value=past_key_values[idx] if past_key_values is not None else None,
+                output_attentions=True,
+            )
+            hidden_states = layer_outputs[0]
+            context_layer_vals.append(decoder_layer.self_attn.context_layer_val)
+
+        return hidden_states, context_layer_vals
+
+    def forward_first_layer(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        head_mask: Optional[torch.Tensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+    ):
+        # Retrieve input_ids and inputs_embeds
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time")
+        elif input_ids is not None:
+            input_shape = input_ids.size()
+            input_ids = input_ids.view(-1, input_shape[-1])
+        elif inputs_embeds is not None:
+            input_shape = inputs_embeds.size()[:-1]
+        else:
+            raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
+
+        past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
+
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+
+        # Embed positions
+        if attention_mask is None:
+            attention_mask = torch.ones(inputs_embeds.shape[:2], dtype=torch.bool, device=inputs_embeds.device)
+        pos_embeds = self.embed_positions(attention_mask, past_key_values_length)
+
+        attention_mask = self._prepare_decoder_attention_mask(
+            attention_mask, input_shape, inputs_embeds, past_key_values_length
+        )
+
+        if self.project_in is not None:
+            inputs_embeds = self.project_in(inputs_embeds)
+
+        hidden_states = inputs_embeds + pos_embeds
+        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+
+        # Get output of the first layer only
+        decoder_layer = self.layers[0]
+        layer_outputs = decoder_layer(
+            hidden_states,
+            attention_mask=attention_mask,
+            layer_head_mask=head_mask[0] if head_mask is not None else None,
+            past_key_value=past_key_values[0] if past_key_values is not None else None,
+            output_attentions=True,
+        )
+
+        return layer_outputs[0], decoder_layer.self_attn.context_layer_val
 
     def forward(
         self,
