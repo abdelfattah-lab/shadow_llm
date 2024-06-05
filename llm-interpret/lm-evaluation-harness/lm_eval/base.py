@@ -451,7 +451,7 @@ class BaseLM(LM):
                 izjns += 1
                 if any(izjns > threshold for trial_range, threshold in trial_thresholds.items() if trial.number in trial_range):
                     break
-                # if izjns > 2000:
+                # if izjns > 500:
                 #     break
                 batch_max_length = torch.max(l_ctx + l_cont).item()
                 inp = inp[:, :batch_max_length]
@@ -568,7 +568,7 @@ class BaseLM(LM):
 
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 2000:
+            if izjns > 500:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -580,7 +580,7 @@ class BaseLM(LM):
                 tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
                 eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
             ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
-            token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")
+            token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")[:, -1, :]
             ll.backward()
             first_embedding = []
             temp_importance_score = torch.zeros(num_hidden_layers, num_heads)
@@ -588,19 +588,19 @@ class BaseLM(LM):
             for layer in range(num_hidden_layers):
                 # if layer == 0:
                 # if layer==0: 
-                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :])
+                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :].cpu().detach())
                 self_attention = self.opt.get_decoder().layers[layer].self_attn
                 mask_gradient = self_attention.stored_gradients
                 if fc_metric_calc:
                     fc1_layer = self.opt.get_decoder().layers[layer].fc1
-                    fc2_layer = self.opt.get_decoder().layers[layer].fc2
+                    # fc2_layer = self.opt.get_decoder().layers[layer].fc2
                     fc1_mask_gradient = fc1_layer.stored_gradients
-                    fc2_mask_gradient = fc2_layer.stored_gradients
+                    # fc2_mask_gradient = fc2_layer.stored_gradients
                     snip_fc1_info = torch.sum(torch.abs(fc1_mask_gradient), dim=0).squeeze()
-                    snip_fc2_info = torch.sum(torch.abs(fc2_mask_gradient), dim=0).squeeze()
+                    # snip_fc2_info = torch.sum(torch.abs(fc2_mask_gradient), dim=0).squeeze()
                     fc1_importance_score[layer] += snip_fc1_info.detach().cpu()
                     temp_fc1_score[layer] += snip_fc1_info.detach().cpu()
-                    fc2_importance_score[layer] += snip_fc2_info.detach().cpu()
+                    # fc2_importance_score[layer] += snip_fc2_info.detach().cpu()
                 mask_gradient = rearrange(mask_gradient, 'b l (h d) -> b l h d', h=num_heads)
                 snip_info = torch.sum(torch.abs(mask_gradient), dim=1).sum(dim=-1).squeeze()
                 # snip_info = torch.einsum("bhli,bhli->bhl", [grad_attn_x, attn_x]).to('cpu') # not all layers are on the same device hence make sure dot is on the self.device
@@ -653,7 +653,7 @@ class BaseLM(LM):
         tracker = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 2000:
+            if izjns > 500:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -665,7 +665,7 @@ class BaseLM(LM):
                 tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
                 eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
             ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
-            token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")
+            token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")[:, -1, :]
             ll.backward()
             first_embedding = []
             temp_importance_score = torch.zeros(num_hidden_layers, num_heads)
@@ -673,7 +673,7 @@ class BaseLM(LM):
             for layer in range(num_hidden_layers):
                 # if layer == 0:
                 # if layer==0: 
-                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :])
+                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :].cpu().detach())
                 self_attention = self.opt.get_decoder().layers[layer].self_attn
                 attn_x = self_attention.context_layer_val
                 grad_attn_x = self_attention.context_layer_val_grad
@@ -693,8 +693,8 @@ class BaseLM(LM):
                     plainact_f1info = fc1_weight_grad * fc1_weight
                     fc1_importance_score[layer] += plainact_f1info.abs().sum(-1).cpu().detach()
                     temp_fc1_score[layer] = plainact_f1info.abs().sum(-1).cpu().detach()
-                    plainact_f2info = fc2_weight_grad * fc2_weight
-                    fc2_importance_score[layer] += plainact_f2info.abs().sum(-1).cpu().detach()
+                    # plainact_f2info = fc2_weight_grad * fc2_weight
+                    # fc2_importance_score[layer] += plainact_f2info.abs().sum(-1).cpu().detach()
             if method == "predictor":
                 # [1, L, E] --> Predictor --> [1, N * H]\
                 encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score, temp_fc1_score)
@@ -751,9 +751,9 @@ class BaseLM(LM):
         tracker = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 2000:
+            if izjns > 500:
                 break
-            # if izjns > 2000:
+            # if izjns > 500:
             #     break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -765,21 +765,23 @@ class BaseLM(LM):
                 tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
                 eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
             ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
-            token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")
+            token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")[:, -1, :]
             first_embedding = []
             temp_importance_score = torch.zeros(num_hidden_layers, num_heads)
             temp_fc1_score = torch.zeros(num_hidden_layers, fc1_neurons)
-            for layer in range(num_hidden_layers):
+            for layer in tqdm(range(num_hidden_layers)):
+                # clear cuda cache
+                torch.cuda.empty_cache()
                 # if layer == 0:
                 # if layer==0: 
-                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :])
+                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :].cpu().detach())
                 self_attention = self.opt.get_decoder().layers[layer].self_attn
                 attn_x = self_attention.context_layer_val
                 attn_x = rearrange(attn_x, 'b l (h d) -> b l h d', h=num_heads)
                 
                 if fc_metric_calc:
                     fc1_output_act = self.opt.get_decoder().layers[layer].fc1_output
-                    fc2_output_act = self.opt.get_decoder().layers[layer].fc2_output
+                    # fc2_output_act = self.opt.get_decoder().layers[layer].fc2_output
 
                 for h_ in range(num_heads):
                     x = (attn_x > 0).float()[:, :, h_, :]
@@ -787,6 +789,7 @@ class BaseLM(LM):
                     # K = x @ x.t()  # Hamming distance
                     K2 = (1. - x) @ (1. - x.t())
                     K = K2.cpu().numpy()  # combine the two parts
+                    del K2, x
                     s, jc = np.linalg.slogdet(K)
                     importance_score[layer, h_] += jc
                     temp_importance_score[layer, h_] += jc
@@ -796,9 +799,10 @@ class BaseLM(LM):
                     seqlen = fc1_x.shape[0]
                     K2_fc1 = torch.diag(torch.matmul((1. - fc1_x).t(), 1. - fc1_x))/seqlen
                     K_fc1 = K2_fc1.cpu().numpy()
-                    fc2_x = (fc2_output_act > 0).float()
-                    K2_fc2 = torch.diag(torch.matmul((1. - fc2_x).t(), 1. - fc2_x))/seqlen
-                    K_fc2 = K2_fc2.cpu().numpy()
+                    del K2_fc1, fc1_x
+                    # fc2_x = (fc2_output_act > 0).float()
+                    # K2_fc2 = torch.diag(torch.matmul((1. - fc2_x).t(), 1. - fc2_x))/seqlen
+                    # K_fc2 = K2_fc2.cpu().numpy()
                     for n_ in range(fc1_neurons):
                         K_value = K_fc1[n_]
                         if K_value > 0:
@@ -806,12 +810,12 @@ class BaseLM(LM):
                             temp_fc1_score[layer, n_] += np.log(K_value)
                         else:
                             fc1_importance_score[layer, n_] += -np.inf
-                    for n_ in range(fc2_neurons):
-                        K_value = K_fc2[n_]
-                        if K_value > 0:
-                            fc2_importance_score[layer, n_] += np.log(K_value)
-                        else:
-                            fc2_importance_score[layer, n_] += -np.inf
+                    # for n_ in range(fc2_neurons):
+                    #     K_value = K_fc2[n_]
+                    #     if K_value > 0:
+                    #         fc2_importance_score[layer, n_] += np.log(K_value)
+                    #     else:
+                    #         fc2_importance_score[layer, n_] += -np.inf
 
             
             if method == "predictor":
@@ -822,7 +826,7 @@ class BaseLM(LM):
             del attn_x, ll
             
             if fc_metric_calc:
-                del fc1_output_act, fc2_output_act
+                del fc1_output_act
             for param in self.opt.parameters():
                 param.grad = None
         # Save it as 'epenas' + task.DATASET_PATH + str(num_fewshot) + '.pkl' in a new directory called 'zcps/' + self.opt.config._name_or_path.replace("facebook/", "") + "/"
@@ -868,7 +872,7 @@ class BaseLM(LM):
         tracker = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 2000:
+            if izjns > 500:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -887,11 +891,11 @@ class BaseLM(LM):
                 temp_importance_score = torch.zeros(num_hidden_layers, num_heads, device=self.device)
                 temp_fc1_score = torch.zeros(num_hidden_layers, fc1_neurons) if fc_metric_calc else None
                 for layer in range(num_hidden_layers):
-                    first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :])
+                    first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :].cpu().detach())
                     self_attention = self.opt.get_decoder().layers[layer].self_attn
                     if fc_metric_calc:
                         fc1_output_act = self.opt.get_decoder().layers[layer].fc1_output
-                        fc2_output_act = self.opt.get_decoder().layers[layer].fc2_output
+                        # fc2_output_act = self.opt.get_decoder().layers[layer].fc2_output
                     attn_x = self_attention.context_layer_val
                     attn_x = rearrange(attn_x, 'b l (h d) -> b l h d', h=num_heads)
                     l2_norm_info = attn_x.norm(dim=0).norm(dim=0).norm(dim=-1).cpu().detach()
@@ -901,8 +905,8 @@ class BaseLM(LM):
                     if fc_metric_calc:
                         fc1_importance_score[layer] += fc1_output_act.norm(dim=0).cpu().detach()
                         temp_fc1_score[layer] += fc1_output_act.norm(dim=0).cpu().detach()
-                        fc2_importance_score[layer] += fc2_output_act.norm(dim=0).cpu().detach()
-                        del fc1_output_act, fc2_output_act  # Free memory
+                        # fc2_importance_score[layer] += fc2_output_act.norm(dim=0).cpu().detach()
+                        del fc1_output_act  # Free memory
                 if method == "predictor":
                     encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score.cpu(), temp_fc1_score.cpu() if fc_metric_calc else None)
                     tracker += 1
@@ -950,7 +954,7 @@ class BaseLM(LM):
     #     tracker = 0
     #     for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
     #         izjns += 1
-    #         if izjns > 2000:
+    #         if izjns > 500:
     #             break
     #         batch_max_length = torch.max(l_ctx + l_cont).item()
     #         inp = inp[:, :batch_max_length]
@@ -962,13 +966,13 @@ class BaseLM(LM):
     #             tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
     #             eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
     #         ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
-    #         token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")
+    #         token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")[:, -1, :]
     #         first_embedding = []
     #         temp_importance_score = torch.zeros(num_hidden_layers, num_heads)
     #         temp_fc1_score = torch.zeros(num_hidden_layers, fc1_neurons)
     #         for layer in range(num_hidden_layers):
     #             # if layer==0: 
-    #             first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :])
+    #             first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :].cpu().detach())
     #             self_attention = self.opt.get_decoder().layers[layer].self_attn
     #             if fc_metric_calc:
     #                 fc1_output_act = self.opt.get_decoder().layers[layer].fc1_output
@@ -1030,7 +1034,7 @@ class BaseLM(LM):
         perhead_class_jacobians = {"l_{}".format(i): {"h_{}".format(h): [] for h in range(num_heads)} for i in range(num_hidden_layers)}
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 2000:
+            if izjns > 500:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -1065,10 +1069,10 @@ class BaseLM(LM):
                 jacobians = torch.stack(perhead_class_jacobians["l_{}".format(layer)]["h_{}".format(head)], dim=0).cpu()
                 # remove wherever jacobians.sum(dim=-1) == 0
                 jacobians = jacobians[jacobians.sum(dim=-1) != 0]
-                subsample_size = 500
+                subsample_size = 200
                 # Randomly sample 100 jacobians
                 jc_values = []
-                for _ in range(5):
+                for _ in range(10):
                     subsample = jacobians[torch.randperm(jacobians.shape[0])[:subsample_size]]
                     corrs = np.corrcoef(subsample)
                     v, _ = np.linalg.eig(corrs)
@@ -1119,7 +1123,7 @@ class BaseLM(LM):
         tracker = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 2000:
+            if izjns > 500:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -1131,7 +1135,7 @@ class BaseLM(LM):
                 tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
                 eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
             ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
-            token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")
+            token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")[:, -1, :]
             ll.backward(retain_graph=True)
             grad_w = [self.opt.get_decoder().layers[layer].self_attn.context_layer_val_grad.clone() for layer in range(num_hidden_layers)]
             
@@ -1148,22 +1152,22 @@ class BaseLM(LM):
             for layer in range(num_hidden_layers):
                 # if layer == 0:
                 # if layer==0: 
-                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :])
+                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :].cpu().detach())
                 self_attention = self.opt.get_decoder().layers[layer].self_attn
                 num_heads = self_attention.num_heads
                 grad_attn_x = self_attention.context_layer_val_grad
                 z += (grad_w[layer] * grad_attn_x).mean()
                 if fc_metric_calc:
                     fc1_weight_grad = self.opt.get_decoder().layers[layer].fc1.weight.grad
-                    fc2_weight_grad = self.opt.get_decoder().layers[layer].fc2.weight.grad
+                    # fc2_weight_grad = self.opt.get_decoder().layers[layer].fc2.weight.grad
                     z += (grad_w_f1[layer] * fc1_weight_grad).mean()
-                    z += (grad_w_f2[layer] * fc2_weight_grad).mean()
+                    # z += (grad_w_f2[layer] * fc2_weight_grad).mean()
             z.backward()
             for layer in range(num_hidden_layers):
                 self_attention_grad = self.opt.get_decoder().layers[layer].self_attn.context_layer_val_grad
                 if fc_metric_calc:
                     fc1_weight_grad = self.opt.get_decoder().layers[layer].fc1.weight.grad
-                    fc2_weight_grad = self.opt.get_decoder().layers[layer].fc2.weight.grad
+                    # fc2_weight_grad = self.opt.get_decoder().layers[layer].fc2.weight.grad
                 # fc1 fc2 weights, attn map
                 self_attention = self.opt.get_decoder().layers[layer].self_attn.context_layer_val
                 if fc_metric_calc:
@@ -1172,20 +1176,20 @@ class BaseLM(LM):
                 self_attn_metrics = -self_attention_grad * self_attention
                 if fc_metric_calc:
                     fc1_metrics = -fc1_weight_grad * fc1_weight
-                    fc2_metrics = -fc2_weight_grad * fc2_weight
+                    # fc2_metrics = -fc2_weight_grad * fc2_weight
                 # rearrange self_attn_metrics 
                 self_attn_metrics = rearrange(self_attn_metrics, 'b l (h d) -> b l h d', h=num_heads)
                 # mean on second dim
                 if fc_metric_calc:
                     fc1_metrics = fc1_metrics.mean(dim=-1)
-                    fc2_metrics = fc2_metrics.mean(dim=-1)
+                    # fc2_metrics = fc2_metrics.mean(dim=-1)
                 self_attn_metrics = self_attn_metrics.sum(dim=0).mean(dim=0).sum(dim=-1)
                 importance_score[layer] += self_attn_metrics.detach().cpu()
                 temp_importance_score[layer] += self_attn_metrics.detach().cpu()
                 if fc_metric_calc:
                     fc1_importance_score[layer] += fc1_metrics.detach().cpu()
                     temp_fc1_score[layer] += fc1_metrics.detach().cpu()
-                    fc2_importance_score[layer] += fc2_metrics.detach().cpu()
+                    # fc2_importance_score[layer] += fc2_metrics.detach().cpu()
             if method == "predictor":
                 encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score, temp_fc1_score)
                 tracker += 1
@@ -1193,7 +1197,7 @@ class BaseLM(LM):
             self.opt.zero_grad()
             del ll
             if fc_metric_calc:
-                del fc1_weight_grad, fc2_weight_grad
+                del fc1_weight_grad
             for param in self.opt.parameters():
                 param.grad = None
             
@@ -1237,7 +1241,7 @@ class BaseLM(LM):
         tracker = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 2000:
+            if izjns > 500:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -1249,7 +1253,7 @@ class BaseLM(LM):
                 tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
                 eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
             ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
-            token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")
+            token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")[:, -1, :]
             ll.backward()
             temp_importance_score = torch.zeros(num_hidden_layers, num_heads)
             temp_fc1_score = torch.zeros(num_hidden_layers, fc1_neurons)
@@ -1257,13 +1261,13 @@ class BaseLM(LM):
             for layer in range(num_hidden_layers):
                 # if layer == 0:
                 # if layer==0: 
-                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :])
+                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :].cpu().detach())
                 self_attention = self.opt.get_decoder().layers[layer].self_attn
                 attn_x = self_attention.context_layer_val
                 grad_attn_x = self_attention.context_layer_val_grad  
                 if fc_metric_calc:          
                     fc1_weight_grad = self.opt.get_decoder().layers[layer].fc1.weight.grad
-                    fc2_weight_grad = self.opt.get_decoder().layers[layer].fc2.weight.grad
+                    # fc2_weight_grad = self.opt.get_decoder().layers[layer].fc2.weight.grad
                 grad_attn_x = rearrange(grad_attn_x, 'b l (h d) -> b l h d', h=num_heads)
                 grad_norm_info = grad_attn_x.norm(dim=0).norm(dim=0).norm(dim=-1)
                 importance_score[layer] += grad_norm_info.cpu().detach()
@@ -1272,17 +1276,18 @@ class BaseLM(LM):
                     fc1_grad_norm_info = fc1_weight_grad.norm(dim=-1)
                     fc1_importance_score[layer] += fc1_grad_norm_info.cpu().detach()
                     temp_fc1_score[layer] = fc1_grad_norm_info.cpu().detach()
-                    fc2_grad_norm_info = fc2_weight_grad.norm(dim=-1)
-                    fc2_importance_score[layer] += fc2_grad_norm_info.cpu().detach()
+                    # fc2_grad_norm_info = fc2_weight_grad.norm(dim=-1)
+                    # fc2_importance_score[layer] += fc2_grad_norm_info.cpu().detach()
             
             if method == "predictor":
+                # import pdb; pdb.set_trace()
                 encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score, temp_fc1_score)
                 tracker += 1
             ## helps in reducing the memory footprint
             self.opt.zero_grad()
             del attn_x, grad_attn_x, ll
             if fc_metric_calc:
-                del fc1_weight_grad, fc2_weight_grad
+                del fc1_weight_grad
 
             for param in self.opt.parameters():
                 param.grad = None
@@ -1327,7 +1332,7 @@ class BaseLM(LM):
         izjns = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 2000:
+            if izjns > 500:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -1339,7 +1344,7 @@ class BaseLM(LM):
                 tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
                 eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
             ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
-            token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")
+            token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")[:, -1, :]
             ll.backward()
             first_embedding = []
             temp_importance_score = torch.zeros(num_hidden_layers, num_heads)
@@ -1347,24 +1352,24 @@ class BaseLM(LM):
             for layer in range(num_hidden_layers):
                 # if layer == 0:
                 # if layer==0: 
-                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :])
+                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :].cpu().detach())
                 self_attention = self.opt.get_decoder().layers[layer].self_attn
                 attn_x = self_attention.context_layer_val
                 grad_attn_x = self_attention.context_layer_val_grad
                 
                 if fc_metric_calc:
                     fc1_weight = self.opt.get_decoder().layers[layer].fc1.weight
-                    fc2_weight = self.opt.get_decoder().layers[layer].fc2.weight
+                    # fc2_weight = self.opt.get_decoder().layers[layer].fc2.weight
                     fc1_weight_grad = self.opt.get_decoder().layers[layer].fc1.weight.grad
-                    fc2_weight_grad = self.opt.get_decoder().layers[layer].fc2.weight.grad
+                    # fc2_weight_grad = self.opt.get_decoder().layers[layer].fc2.weight.grad
                     fc1_input_act = self.opt.get_decoder().layers[layer].fc1_input
                     fc1_input_act_grad = self.opt.get_decoder().layers[layer].fc1_input_grad
-                    fc2_input_act = self.opt.get_decoder().layers[layer].fc2_input
-                    fc2_input_act_grad = self.opt.get_decoder().layers[layer].fc2_input_grad
+                    # fc2_input_act = self.opt.get_decoder().layers[layer].fc2_input
+                    # fc2_input_act_grad = self.opt.get_decoder().layers[layer].fc2_input_grad
                     fc1_output_act = self.opt.get_decoder().layers[layer].fc1_output
                     fc1_output_act_grad = self.opt.get_decoder().layers[layer].fc1_output_grad
-                    fc2_output_act = self.opt.get_decoder().layers[layer].fc2_output
-                    fc2_output_act_grad = self.opt.get_decoder().layers[layer].fc2_output_grad
+                    # fc2_output_act = self.opt.get_decoder().layers[layer].fc2_output
+                    # fc2_output_act_grad = self.opt.get_decoder().layers[layer].fc2_output_grad
 
                 fisher_info = (attn_x * grad_attn_x).pow(2).mean(dim=[0, 1]).reshape(num_heads, -1).sum(dim=-1)  # averaging over batch and sequence length
                 importance_score[layer] += fisher_info.cpu().detach()
@@ -1373,13 +1378,13 @@ class BaseLM(LM):
                     fc1_fisher_info = (fc1_output_act * fc1_output_act_grad).pow(2).mean(dim=[0])
                     fc1_importance_score[layer] += fc1_fisher_info.cpu().detach()
                     temp_fc1_score[layer] += fc1_fisher_info.cpu().detach()
-                    fc2_fisher_info = (fc2_output_act * fc2_output_act_grad).pow(2).mean(dim=[0])
-                    fc2_importance_score[layer] += fc2_fisher_info.cpu().detach()
+                    # fc2_fisher_info = (fc2_output_act * fc2_output_act_grad).pow(2).mean(dim=[0])
+                    # fc2_importance_score[layer] += fc2_fisher_info.cpu().detach()
             ## helps in reducing the memory footprint
             self.opt.zero_grad()
             del attn_x, grad_attn_x, ll
             if fc_metric_calc:
-                del fc1_weight, fc2_weight, fc1_weight_grad, fc2_weight_grad, fc1_input_act, fc1_input_act_grad, fc2_input_act, fc2_input_act_grad, fc1_output_act, fc1_output_act_grad, fc2_output_act, fc2_output_act_grad
+                del fc1_weight, fc1_weight_grad, fc1_input_act, fc1_input_act_grad, fc1_output_act, fc1_output_act_grad
             for param in self.opt.parameters():
                 param.grad = None
             
@@ -1421,7 +1426,7 @@ class BaseLM(LM):
         izjns = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 2000:
+            if izjns > 500:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -1517,7 +1522,7 @@ class BaseLM(LM):
                 tot_tokens += attn_mask[i].float().cpu().detach().sum().data - 1 ## if the length of the sequence is N, then the gradient is calculated over N - 1 tokens
                 eff_tokens += (labels[i] != -100.).cpu().detach().sum().data ## we won't have gradients for non-label positions in the last layer
             ll = self._model_call(inp.to(self.device), attn_mask.to(self.device), labels.to(self.device))
-            token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")
+            token_embedding = self.opt.model.decoder.embed_tokens(inp.to(self.device)).detach().to("cpu")[:, -1, :]
             ll.backward()
             for layer in range(num_hidden_layers):
                 self_attention = self.opt.get_decoder().layers[layer].self_attn

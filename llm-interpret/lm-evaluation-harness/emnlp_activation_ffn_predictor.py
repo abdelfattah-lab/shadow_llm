@@ -25,7 +25,8 @@ parser.add_argument("--dataset", type=str, default="piqa", help="combined, copa,
 parser.add_argument("--dataset_cname", type=str, default="piqa", help="combined, copa, main, winogrande_xl, piqa")
 parser.add_argument("--zcp_metric", type=str, default="fisher", help="fisher, l2_norm, plainact, etc.")
 parser.add_argument("--execmode", type=str, default="train", help="train, headmodel")
-parser.add_argument("--emb_style", type=str, default="b1e", help="b1e, b1e_seq, ble")
+parser.add_argument("--emb_style", type=str, default="b1e", help="b1e, b1eL, b1e_seq, ble")
+parser.add_argument("--fewshot", type=int, default=0, help="0, 3, 5")
 # boolean argument rerun
 parser.add_argument("--rerun", action="store_true", help="rerun the model")
 args = parser.parse_args()
@@ -34,6 +35,7 @@ args = parser.parse_args()
 dpath_style = args.emb_style if args.emb_style != "b1e_seq" else f"{args.emb_style}_fc1_{0}"
 if os.path.exists(f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/{dpath_style}.pt') and not args.rerun:
     # Write to file "already_done.log" which model exists
+    print("Already done, exiting")
     with open("already_done.log", "a") as f:
         f.write(f"pred_models_{args.basemodel.split('-')[-1]}/{args.zcp_metric}/{args.dataset}/{dpath_style}.pt\n")
     exit(0)
@@ -87,28 +89,90 @@ class B1ESeqPredModelFFN(nn.Module):
 class B1ESequenceDataset(Dataset):
     def __init__(self, data):
         self.data = data
+        self.valid_indices = self._filter_nan_indices()
+
+    def _filter_nan_indices(self):
+        valid_indices = []
+        for idx in range(len(self.data)):
+            input_matrix = self.data[idx][1][0].squeeze().detach()  # [E]
+            # Normalize to 0-1
+            input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
+            target_activations = self.data[idx][3].flatten().detach()  # [1, N*H]
+            # Normalize to 0-1
+            target_activations = (target_activations - target_activations.min()) / (target_activations.max() - target_activations.min())
+            if not (torch.isnan(input_matrix).any() or torch.isnan(target_activations).any()):
+                valid_indices.append(idx)
+        return valid_indices
+
     def __len__(self):
-        return len(self.data)
+        return len(self.valid_indices)
     def __getitem__(self, idx):
-        input_matrix = self.data[idx][1][0].squeeze()  # [E]
+        idx = self.valid_indices[idx]
+        input_matrix = self.data[idx][1][0].squeeze().detach()  # [E]
         # Normalize to 0-1
         input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
-        target_activations = self.data[idx][3].flatten()  # [1, N*H]
+        target_activations = self.data[idx][3].flatten().detach()  # [1, N*H]
         # Normalize to 0-1
         target_activations = (target_activations - target_activations.min()) / (target_activations.max() - target_activations.min())
+        return input_matrix.float(), torch.tensor(target_activations, dtype=torch.float)
+
+class B1ELSequenceDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
+        self.valid_indices = self._filter_nan_indices()
+
+    def _filter_nan_indices(self):
+        valid_indices = []
+        for idx in range(len(self.data)):
+            input_matrix = self.data[idx][1][0].squeeze().detach()  # [E]
+            # Normalize to 0-1
+            input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
+            target_activations = self.data[idx][3].detach()  # [1, N*H]
+            # Normalize to 0-1
+            target_activations = (target_activations - target_activations.min(keepdims=True, axis=1)[0]) / (target_activations.max(keepdims=True, axis=1)[0] - target_activations.min(keepdims=True, axis=1)[0])
+            target_activations = target_activations.flatten()
+            if not (torch.isnan(input_matrix).any() or torch.isnan(target_activations).any()):
+                valid_indices.append(idx)
+        return valid_indices
+
+    def __len__(self):
+        return len(self.valid_indices)
+    def __getitem__(self, idx):
+        idx = self.valid_indices[idx]
+        input_matrix = self.data[idx][1][0].squeeze().detach()  # [E]
+        # Normalize to 0-1
+        input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
+        target_activations = self.data[idx][3].detach()  # [1, N*H]
+        # Normalize to 0-1
+        target_activations = (target_activations - target_activations.min(keepdims=True, axis=1)[0]) / (target_activations.max(keepdims=True, axis=1)[0] - target_activations.min(keepdims=True, axis=1)[0])
+        target_activations = target_activations.flatten()
         return input_matrix.float(), torch.tensor(target_activations, dtype=torch.float)
 
 class B1ESeqSequenceDataset(Dataset):
     def __init__(self, data, seqlayer):
         self.data = data
         self.seqlayer = seqlayer
+        self.valid_indices = self._filter_nan_indices()
+
+    def _filter_nan_indices(self):
+        valid_indices = []
+        for idx in range(len(self.data)):
+            input_matrix = self.data[idx][1][self.seqlayer].squeeze().detach()  # [E]
+            # Normalize to 0-1
+            input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
+            target_activations = self.data[idx][3][self.seqlayer].flatten().detach()  # [1, N*H]
+            target_activations = (target_activations - target_activations.min()) / (target_activations.max() - target_activations.min())
+            if not (torch.isnan(input_matrix).any() or torch.isnan(target_activations).any()):
+                valid_indices.append(idx)
+        return valid_indices
     def __len__(self):
-        return len(self.data)
+        return len(self.valid_indices)
     def __getitem__(self, idx):
-        input_matrix = self.data[idx][1][self.seqlayer].squeeze()  # [E]
+        idx = self.valid_indices[idx]
+        input_matrix = self.data[idx][1][self.seqlayer].squeeze().detach()  # [E]
         # Normalize to 0-1
         input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
-        target_activations = self.data[idx][3][self.seqlayer].flatten()  # [1, N*H]
+        target_activations = self.data[idx][3][self.seqlayer].flatten().detach()  # [1, N*H]
         target_activations = (target_activations - target_activations.min()) / (target_activations.max() - target_activations.min())
         return input_matrix.float(), torch.tensor(target_activations, dtype=torch.float)
         
@@ -121,11 +185,11 @@ class FSeqSequenceDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        input_matrix = self.data[idx][0].squeeze()  # [L, E]
+        input_matrix = self.data[idx][0].squeeze().detach()  # [L, E]
         raise NotImplementedError("This is DISABLED. regenerate traces after removing [:, -1, :] from context_layer_val writes to first_embedding in base.py!")
         # Normalize to 0-1
         input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
-        target_activations = self.data[idx][3].flatten()  # [1, N*H]
+        target_activations = self.data[idx][3].flatten().detach()  # [1, N*H]
         seq_len = input_matrix.shape[0]
         if seq_len < self.max_seq_len:
             padding = torch.zeros((self.max_seq_len - seq_len, input_matrix.shape[1]))
@@ -134,8 +198,8 @@ class FSeqSequenceDataset(Dataset):
         return input_matrix.float(), torch.tensor(target_activations, dtype=torch.float)
 
 # Load data
-base_path = f'zcps/opt-1.3b/'
-with open(base_path + f'./{args.zcp_metric}_trace_{args.dataset_cname}_0.pkl', 'rb') as f:
+base_path = f'zcps/{args.basemodel}/'
+with open(base_path + f'./{args.zcp_metric}_trace_{args.dataset_cname}_{args.fewshot}.pkl', 'rb') as f:
     data = pickle.load(f)
 
 # Get i/o neuron information
@@ -156,7 +220,7 @@ test_data = datavals[split_idx:]
 #
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 num_epochs = 100
-batch_size = 4
+batch_size = 32
 
 if args.emb_style == 'b1e':
     # Create b1e dataset
@@ -164,6 +228,12 @@ if args.emb_style == 'b1e':
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     b1e_test_dataset = B1ESequenceDataset(test_data)
     test_loader = DataLoader(b1e_test_dataset, batch_size=batch_size, shuffle=False)
+    model = B1EPredModelFFN(embedding_dim=embedding_dim, output_dim=total_neurons).to(device)
+elif args.emb_style == 'b1eL':
+    train_dataset = B1ELSequenceDataset(train_data)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    b1el_test_dataset = B1ELSequenceDataset(test_data)
+    test_loader = DataLoader(b1el_test_dataset, batch_size=batch_size, shuffle=False)
     model = B1EPredModelFFN(embedding_dim=embedding_dim, output_dim=total_neurons).to(device)
 elif args.emb_style == 'b1e_seq':
     # Create b1eseq dataset
@@ -195,7 +265,7 @@ dpath_style = args.emb_style if args.emb_style != "b1e_seq" else f"{args.emb_sty
 if os.path.exists(f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/{dpath_style}.pt') and not args.rerun:
     model.load_state_dict(torch.load(f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/{dpath_style}.pt'))
 else:
-    if args.emb_style in ["b1e", "ble"]:
+    if args.emb_style in ["b1e", "ble", "b1eL"]:
         # Train model from scratch
         # Loss and optimizer
         criterion = nn.MSELoss()
@@ -255,19 +325,16 @@ else:
         tau = sum(kdt_register)/len(kdt_register)
         print(f"Test Loss: {test_loss}, Spearman R: {tau}")
         # Save the test_loss and tau along with the args to a proper csv file in the pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv file
-        if not os.path.exists(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv'):
-            with open(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv', 'w') as f:
-                f.write("dataset,zcp_metric,emb_style,test_loss,tau\n")
-        with open(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv', 'a') as f:
-            f.write(f"{args.dataset},{args.zcp_metric},{args.emb_style},{test_loss},{tau}\n")
+        if not os.path.exists(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results_ffn.csv'):
+            with open(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results_ffn.csv', 'w') as f:
+                f.write("dataset,fewshow,zcp_metric,emb_style,test_loss,tau\n")
+        with open(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results_ffn.csv', 'a') as f:
+            f.write(f"{args.dataset},{args.fewshot},{args.zcp_metric},{args.emb_style},{test_loss},{tau}\n")
         # Save predictor
         torch.save(model.state_dict(), f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/{args.emb_style}_fc1.pt')
     elif args.emb_style == "b1e_seq":
         datapointwise_order = {idx: [[], []] for idx, (_, _) in enumerate(b1e_seq_test_loader[0])} # For each datapoint, construct a N*H order
         for curr_layer in range(nlayers):
-            # skip if curr_layer < 13
-            if curr_layer < 13:
-                continue
             train_loader = b1e_seq_train_loader[curr_layer]
             test_loader = b1e_seq_test_loader[curr_layer]
             model = model_dict[curr_layer]
@@ -342,8 +409,8 @@ else:
         tau = sum(spearman_list)/len(spearman_list)
         print(f"Spearman R: {tau}")
         # Save the test_loss and tau along with the args to a proper csv file in the pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv file
-        if not os.path.exists(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv'):
-            with open(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv', 'w') as f:
-                f.write("dataset,zcp_metric,emb_style,test_loss,tau\n")
-        with open(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv', 'a') as f:
-            f.write(f"{args.dataset},{args.zcp_metric},{args.emb_style},{0},{tau}\n")
+        if not os.path.exists(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results_ffn.csv'):
+            with open(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results_ffn.csv', 'w') as f:
+                f.write("dataset,fewshot,zcp_metric,emb_style,test_loss,tau\n")
+        with open(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results_ffn.csv', 'a') as f:
+            f.write(f"{args.dataset},{args.fewshot},{args.zcp_metric},{args.emb_style},{0},{tau}\n")

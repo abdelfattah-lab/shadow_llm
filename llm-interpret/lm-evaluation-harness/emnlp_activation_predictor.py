@@ -15,6 +15,8 @@ from torch.utils.data import Dataset, DataLoader
 import pickle
 from torch.nn.utils.rnn import pad_sequence
 import argparse
+import seaborn as sns
+
 # python emnlp_activation_predictor.py --dataset piqa --zcp_metric fisher --basemodel opt-1.3b --execmode train --emb_style b1e --rerun
 # python emnlp_activation_predictor.py --dataset piqa --zcp_metric fisher --basemodel opt-1.3b --execmode train --emb_style b1e_seq --rerun
 # python emnlp_activation_predictor.py --dataset piqa --zcp_metric fisher --basemodel opt-1.3b --execmode train --emb_style ble --rerun
@@ -25,7 +27,8 @@ parser.add_argument("--dataset", type=str, default="piqa", help="combined, copa,
 parser.add_argument("--dataset_cname", type=str, default="piqa", help="combined, copa, main, winogrande_xl, piqa")
 parser.add_argument("--zcp_metric", type=str, default="fisher", help="fisher, l2_norm, plainact, etc.")
 parser.add_argument("--execmode", type=str, default="train", help="train, headmodel")
-parser.add_argument("--emb_style", type=str, default="b1e", help="b1e, b1e_seq, ble")
+parser.add_argument("--emb_style", type=str, default="b1e", help="b1e, b1eL, b1e_seq, ble")
+parser.add_argument("--fewshot", type=int, default=0, help="0, 3, 5")
 # boolean argument rerun
 parser.add_argument("--rerun", action="store_true", help="rerun the model")
 args = parser.parse_args()
@@ -85,28 +88,90 @@ class B1ESeqPredModel(nn.Module):
 class B1ESequenceDataset(Dataset):
     def __init__(self, data):
         self.data = data
+        self.valid_indices = self._filter_nan_indices()
+
+    def _filter_nan_indices(self):
+        valid_indices = []
+        for idx in range(len(self.data)):
+            input_matrix = self.data[idx][1][0].squeeze().detach()  # [E]
+            # Normalize to 0-1
+            input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
+            target_activations = self.data[idx][2].flatten().detach()  # [1, N*H]
+            # Normalize to 0-1
+            target_activations = (target_activations - target_activations.min()) / (target_activations.max() - target_activations.min())
+            if not (torch.isnan(input_matrix).any() or torch.isnan(target_activations).any()):
+                valid_indices.append(idx)
+        return valid_indices
+
     def __len__(self):
-        return len(self.data)
+        return len(self.valid_indices)
     def __getitem__(self, idx):
-        input_matrix = self.data[idx][1][0].squeeze()  # [E]
+        idx = self.valid_indices[idx]
+        input_matrix = self.data[idx][1][0].squeeze().detach()  # [E]
         # Normalize to 0-1
         input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
-        target_activations = self.data[idx][2].flatten()  # [1, N*H]
+        target_activations = self.data[idx][2].flatten().detach()  # [1, N*H]
         # Normalize to 0-1
         target_activations = (target_activations - target_activations.min()) / (target_activations.max() - target_activations.min())
+        return input_matrix.float(), torch.tensor(target_activations, dtype=torch.float)
+
+class B1ELSequenceDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
+        self.valid_indices = self._filter_nan_indices()
+
+    def _filter_nan_indices(self):
+        valid_indices = []
+        for idx in range(len(self.data)):
+            input_matrix = self.data[idx][1][0].squeeze().detach()  # [E]
+            # Normalize to 0-1
+            input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
+            target_activations = self.data[idx][2].detach()  # [1, N*H]
+            # Normalize to 0-1 for each row, keepdims=True
+            target_activations = (target_activations - target_activations.min(keepdims=True, axis=1)[0]) / (target_activations.max(keepdims=True, axis=1)[0] - target_activations.min(keepdims=True, axis=1)[0])
+            target_activations = target_activations.flatten()
+            if not (torch.isnan(input_matrix).any() or torch.isnan(target_activations).any()):
+                valid_indices.append(idx)
+        return valid_indices
+
+    def __len__(self):
+        return len(self.valid_indices)
+    def __getitem__(self, idx):
+        idx = self.valid_indices[idx]
+        input_matrix = self.data[idx][1][0].squeeze().detach()  # [E]
+        # Normalize to 0-1
+        input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
+        target_activations = self.data[idx][2].detach()  # [1, N*H]
+        # Normalize to 0-1 for each row, keepdims=True
+        target_activations = (target_activations - target_activations.min(keepdims=True, axis=1)[0]) / (target_activations.max(keepdims=True, axis=1)[0] - target_activations.min(keepdims=True, axis=1)[0])
+        target_activations = target_activations.flatten()
         return input_matrix.float(), torch.tensor(target_activations, dtype=torch.float)
 
 class B1ESeqSequenceDataset(Dataset):
     def __init__(self, data, seqlayer):
         self.data = data
         self.seqlayer = seqlayer
+        self.valid_indices = self._filter_nan_indices()
+
+    def _filter_nan_indices(self):
+        valid_indices = []
+        for idx in range(len(self.data)):
+            input_matrix = self.data[idx][1][self.seqlayer].squeeze().detach()  # [E]
+            # Normalize to 0-1
+            input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
+            target_activations = self.data[idx][2][self.seqlayer].flatten().detach()  # [1, N*H]
+            target_activations = (target_activations - target_activations.min()) / (target_activations.max() - target_activations.min())
+            if not (torch.isnan(input_matrix).any() or torch.isnan(target_activations).any()):
+                valid_indices.append(idx)
+        return valid_indices
     def __len__(self):
-        return len(self.data)
+        return len(self.valid_indices)
     def __getitem__(self, idx):
-        input_matrix = self.data[idx][1][self.seqlayer].squeeze()  # [E]
+        idx = self.valid_indices[idx]
+        input_matrix = self.data[idx][1][self.seqlayer].squeeze().detach()  # [E]
         # Normalize to 0-1
         input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
-        target_activations = self.data[idx][2][self.seqlayer].flatten()  # [1, N*H]
+        target_activations = self.data[idx][2][self.seqlayer].flatten().detach()  # [1, N*H]
         target_activations = (target_activations - target_activations.min()) / (target_activations.max() - target_activations.min())
         return input_matrix.float(), torch.tensor(target_activations, dtype=torch.float)
         
@@ -119,11 +184,11 @@ class FSeqSequenceDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        input_matrix = self.data[idx][0].squeeze()  # [L, E]
+        input_matrix = self.data[idx][0].squeeze().detach()  # [L, E]
         raise NotImplementedError("This is DISABLED. regenerate traces after removing [:, -1, :] from context_layer_val writes to first_embedding in base.py!")
         # Normalize to 0-1
         input_matrix = (input_matrix - input_matrix.min()) / (input_matrix.max() - input_matrix.min())
-        target_activations = self.data[idx][2].flatten()  # [1, N*H]
+        target_activations = self.data[idx][2].flatten().detach()  # [1, N*H]
         seq_len = input_matrix.shape[0]
         if seq_len < self.max_seq_len:
             padding = torch.zeros((self.max_seq_len - seq_len, input_matrix.shape[1]))
@@ -132,9 +197,78 @@ class FSeqSequenceDataset(Dataset):
         return input_matrix.float(), torch.tensor(target_activations, dtype=torch.float)
 
 # Load data
-base_path = f'zcps/opt-1.3b/'
-with open(base_path + f'./{args.zcp_metric}_trace_{args.dataset_cname}_0.pkl', 'rb') as f:
+base_path = f'zcps/{args.basemodel}/'
+with open(base_path + f'./{args.zcp_metric}_trace_{args.dataset_cname}_{args.fewshot}.pkl', 'rb') as f:
     data = pickle.load(f)
+# import pdb; pdb.set_trace()
+debug_statistics = False
+if debug_statistics:
+    # make directory "zcp_statistics_ablation" if it doesnt exist
+    ablation_path = "zcp_statistics_ablation"
+    if not os.path.exists(ablation_path):
+        os.makedirs(ablation_path)
+    data_last = np.asarray([data[xgf][-1].flatten().cpu().numpy() for xgf in range(50)]).flatten()
+    data_second_last = np.asarray([data[xgf][-2].flatten().cpu().numpy() for xgf in range(400)]).flatten()
+    def print_statistics(data, name):
+        print(f"Statistics for {name} on {args.zcp_metric}:")
+        print(f"Mean: {np.mean(data)}")
+        print(f"Std Dev: {np.std(data)}")
+        print(f"Min: {np.min(data)}")
+        print(f"Max: {np.max(data)}")
+        print(f"25th percentile: {np.percentile(data, 25)}")
+        print(f"50th percentile (median): {np.percentile(data, 50)}")
+        print(f"75th percentile: {np.percentile(data, 75)}")
+        print("\n")
+    print_statistics(data_last, "FFN Activation")
+    print_statistics(data_second_last, "Heads Activation")
+    def plot_histogram(data, title):
+        plt.hist(data, bins=2000, alpha=0.7)
+        plt.title(title)
+        plt.xlabel("Value")
+        plt.ylabel("Frequency")
+        plt.savefig(f'{ablation_path}/{args.zcp_metric}_{title}.pdf')
+        plt.cla()
+        plt.clf()
+    plot_histogram(data_last, f'Distribution of FFN activations for {args.zcp_metric}')
+    plot_histogram(data_second_last, f'Distribution of Heads activations for {args.zcp_metric}')
+    def detect_outliers_iqr(data):
+        Q1 = np.percentile(data, 25)
+        Q3 = np.percentile(data, 75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
+        outliers = (data < lower_bound) | (data > upper_bound)
+        return outliers
+    outliers_last = detect_outliers_iqr(data_last)
+    outliers_second_last = detect_outliers_iqr(data_second_last)
+    print(f'Number of outliers in FFN for {args.zcp_metric}: {np.sum(outliers_last)}')
+    print(f"Number of outliers in Heads for {args.zcp_metric}: {np.sum(outliers_second_last)}")
+    def min_max_normalize(data):
+        return (data - np.min(data)) / (np.max(data) - np.min(data))
+    data_last_normalized = min_max_normalize(data_last)
+    data_second_last_normalized = min_max_normalize(data_second_last)
+    plot_histogram(data_last_normalized, f'Normalized Distribution of FFN activations for {args.zcp_metric}')
+    plot_histogram(data_second_last_normalized, f'Normalized Distribution of Heads activations for {args.zcp_metric}')
+    # Prepare data for CSV
+    stats = {
+        "zcp_metric": args.zcp_metric,
+        "data_type": ["FFN Activation", "Heads Activation"],
+        "mean": [np.mean(data_last), np.mean(data_second_last)],
+        "std_dev": [np.std(data_last), np.std(data_second_last)],
+        "min": [np.min(data_last), np.min(data_second_last)],
+        "max": [np.max(data_last), np.max(data_second_last)],
+        "25th_percentile": [np.percentile(data_last, 25), np.percentile(data_second_last, 25)],
+        "50th_percentile": [np.percentile(data_last, 50), np.percentile(data_second_last, 50)],
+        "75th_percentile": [np.percentile(data_last, 75), np.percentile(data_second_last, 75)],
+        "num_outliers": [np.sum(outliers_last), np.sum(outliers_second_last)]
+    }
+    df_stats = pd.DataFrame(stats)
+    csv_file = f'{ablation_path}/zcp_stats.csv'
+    if not os.path.exists(csv_file):
+        df_stats.to_csv(csv_file, index=False)
+    else:
+        df_stats.to_csv(csv_file, mode='a', header=False, index=False)
+    exit(0)
 
 # Get i/o neuron information
 nlayers = data[0][2].shape[0]
@@ -171,6 +305,13 @@ elif args.emb_style == 'b1e_seq':
     b1e_seq_train_loader = {k: DataLoader(v, batch_size=batch_size, shuffle=True) for k, v in b1e_seq_traindict.items()}
     b1e_seq_test_loader = {k: DataLoader(v, batch_size=batch_size, shuffle=False) for k, v in b1e_seq_testdict.items()}
     model_dict = {k: B1ESeqPredModel(embedding_dim=embedding_dim, output_dim=num_heads).to(device) for k in range(nlayers)}
+elif args.emb_style == "b1eL":
+    # Create b1eL dataset
+    train_dataset = B1ELSequenceDataset(train_data)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    b1el_test_dataset = B1ELSequenceDataset(test_data)
+    test_loader = DataLoader(b1el_test_dataset, batch_size=batch_size, shuffle=False)
+    model = B1EPredModel(embedding_dim=embedding_dim, output_dim=total_heads).to(device)
 elif args.emb_style == 'ble':
     # Create fseq dataset
     train_dataset = FSeqSequenceDataset(train_data, max_seq_len)
@@ -189,7 +330,7 @@ dpath_style = args.emb_style if args.emb_style != "b1e_seq" else f"{args.emb_sty
 if os.path.exists(f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/{dpath_style}.pt') and not args.rerun:
     model.load_state_dict(torch.load(f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/{dpath_style}.pt'))
 else:
-    if args.emb_style in ["b1e", "ble"]:
+    if args.emb_style in ["b1e", "b1eL", "ble"]:
         # Train model from scratch
         # Loss and optimizer
         criterion = nn.MSELoss()
@@ -251,9 +392,9 @@ else:
         # Save the test_loss and tau along with the args to a proper csv file in the pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv file
         if not os.path.exists(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv'):
             with open(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv', 'w') as f:
-                f.write("dataset,zcp_metric,emb_style,test_loss,tau\n")
+                f.write("dataset,fewshot,zcp_metric,emb_style,test_loss,tau\n")
         with open(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv', 'a') as f:
-            f.write(f"{args.dataset},{args.zcp_metric},{args.emb_style},{test_loss},{tau}\n")
+            f.write(f"{args.dataset},{args.fewshot},{args.zcp_metric},{args.emb_style},{test_loss},{tau}\n")
         # Save predictor
         torch.save(model.state_dict(), f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/{args.emb_style}.pt')
     elif args.emb_style == "b1e_seq":
@@ -335,6 +476,6 @@ else:
         # Save the test_loss and tau along with the args to a proper csv file in the pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv file
         if not os.path.exists(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv'):
             with open(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv', 'w') as f:
-                f.write("dataset,zcp_metric,emb_style,test_loss,tau\n")
+                f.write("dataset,fewshot,zcp_metric,emb_style,test_loss,tau\n")
         with open(f'pred_models_{args.basemodel.split("-")[-1]}/predictor_results.csv', 'a') as f:
-            f.write(f"{args.dataset},{args.zcp_metric},{args.emb_style},{0},{tau}\n")
+            f.write(f"{args.dataset},{args.fewshot},{args.zcp_metric},{args.emb_style},{0},{tau}\n")

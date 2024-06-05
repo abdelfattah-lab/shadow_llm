@@ -215,6 +215,19 @@ class HFLM(BaseLM):
                 self.fc_model.load_state_dict(torch.load(model_path))
                 # cuda it
                 self.fc_model = self.fc_model.to(self._device)
+        if self.maskmethod == "predictorL":
+            self.headpred_model = B1EPredModel(embedding_dim=2048, output_dim=num_hidden_layers*num_heads)
+            model_path = f'pred_models_{model_size}/{zcp_calc}/{predictor_}/b1eL.pt'
+            self.headpred_model.load_state_dict(torch.load(model_path))
+            # cuda it
+            self.headpred_model = self.headpred_model.to(self._device)
+            if self.fcmaskmethod == "fc":
+                self.fc_model = B1EPredModelFFN(embedding_dim=2048, output_dim=self.opt.config.ffn_dim*num_hidden_layers)
+                model_size = pretrained.split('-')[-1]
+                model_path = f'pred_models_{model_size}/{zcp_calc}/{predictor_}/b1eL_fc1.pt'
+                self.fc_model.load_state_dict(torch.load(model_path))
+                # cuda it
+                self.fc_model = self.fc_model.to(self._device)
         if self.maskmethod == "dejavu":
             for layer in range(num_hidden_layers):
                 predm_ = B1ESeqPredModel(embedding_dim=2048 , output_dim=num_heads)
@@ -281,7 +294,7 @@ class HFLM(BaseLM):
                 if self.maskmethod == "original":
                     self.newmask = self.head_mask
                     self.ffn_fc_mask = self.ffn_fc_mask
-                elif self.maskmethod == "predictor":
+                elif self.maskmethod == "predictor" or self.maskmethod == "predictorL":
                     self.newmask = torch.ones_like(self.head_mask)
                     self.ffn_fc_mask = torch.ones_like(self.ffn_fc_mask)
                     _, context_layer_val = self.opt.get_decoder().forward_first_layer(
