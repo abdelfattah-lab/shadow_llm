@@ -1,0 +1,1 @@
+perlayer,50,fc,False,fisher,facebook/opt-1.3b,opt1.3b_checkpoints,opt1.3b_tokenizer,1,zcps/opt-1.3b/fisher_piqa_3.pkl,50,original,piqa,wikitext,wikitext,wikitext,40.33834497616566,1.996536741344498,0.9974996214664643
