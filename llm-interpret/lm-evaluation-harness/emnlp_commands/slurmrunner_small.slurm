@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J allnasspace
-#SBATCH -o /home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/slurm_predtrain/rt%j.out
-#SBATCH -e /home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/slurm_predtrain/rt%j.err
+#SBATCH -o /home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/slurm_30bpred/rt%j.out
+#SBATCH -e /home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/slurm_30bpred/rt%j.err
 #SBATCH -N 1
 #SBATCH --mem=90000
 #SBATCH -t 48:00:00

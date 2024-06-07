@@ -1,0 +1,13 @@
+######################### Starting Task all #########################
+sbatch --requeue slurmrunner_small.slurm "python emnlp_activation_predictor.py --fewshot 5 --dataset all --dataset_cname all --zcp_metric plainact --basemodel opt-30b --execmode train --emb_style b1e --rerun"
+sbatch --requeue slurmrunner_small.slurm "python emnlp_activation_ffn_predictor.py --fewshot 5 --dataset all --dataset_cname all --zcp_metric plainact --basemodel opt-30b --execmode train --emb_style b1e --rerun"
+sbatch --requeue slurmrunner_small.slurm "python emnlp_activation_predictor.py --fewshot 5 --dataset all --dataset_cname all --zcp_metric plainact --basemodel opt-30b --execmode train --emb_style b1e_seq --rerun"
+sbatch --requeue slurmrunner_small.slurm "python emnlp_activation_ffn_predictor.py --fewshot 5 --dataset all --dataset_cname all --zcp_metric plainact --basemodel opt-30b --execmode train --emb_style b1e_seq --rerun"
+sbatch --requeue slurmrunner_small.slurm "python emnlp_activation_predictor.py --fewshot 5 --dataset all --dataset_cname all --zcp_metric plainact --basemodel opt-30b --execmode train --emb_style b1eL --rerun"
+sbatch --requeue slurmrunner_small.slurm "python emnlp_activation_ffn_predictor.py --fewshot 5 --dataset all --dataset_cname all --zcp_metric plainact --basemodel opt-30b --execmode train --emb_style b1eL --rerun"
+sbatch --requeue slurmrunner_small.slurm "python emnlp_activation_predictor.py --fewshot 5 --dataset all --dataset_cname all --zcp_metric l2_norm --basemodel opt-30b --execmode train --emb_style b1e --rerun"
+sbatch --requeue slurmrunner_small.slurm "python emnlp_activation_ffn_predictor.py --fewshot 5 --dataset all --dataset_cname all --zcp_metric l2_norm --basemodel opt-30b --execmode train --emb_style b1e --rerun"
+sbatch --requeue slurmrunner_small.slurm "python emnlp_activation_predictor.py --fewshot 5 --dataset all --dataset_cname all --zcp_metric l2_norm --basemodel opt-30b --execmode train --emb_style b1e_seq --rerun"
+sbatch --requeue slurmrunner_small.slurm "python emnlp_activation_ffn_predictor.py --fewshot 5 --dataset all --dataset_cname all --zcp_metric l2_norm --basemodel opt-30b --execmode train --emb_style b1e_seq --rerun"
+sbatch --requeue slurmrunner_small.slurm "python emnlp_activation_predictor.py --fewshot 5 --dataset all --dataset_cname all --zcp_metric l2_norm --basemodel opt-30b --execmode train --emb_style b1eL --rerun"
+sbatch --requeue slurmrunner_small.slurm "python emnlp_activation_ffn_predictor.py --fewshot 5 --dataset all --dataset_cname all --zcp_metric l2_norm --basemodel opt-30b --execmode train --emb_style b1eL --rerun"

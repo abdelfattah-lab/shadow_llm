@@ -30,7 +30,9 @@ parser.add_argument("--fewshot", type=int, default=0, help="0, 3, 5")
 # boolean argument rerun
 parser.add_argument("--rerun", action="store_true", help="rerun the model")
 args = parser.parse_args()
-
+print(args)
+# print name of this file
+print(__file__)
 
 dpath_style = args.emb_style if args.emb_style != "b1e_seq" else f"{args.emb_style}_fc1_{0}"
 if os.path.exists(f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/{dpath_style}.pt') and not args.rerun:
@@ -67,8 +69,8 @@ class BLEPredModel(nn.Module):
 class B1EPredModelFFN(nn.Module):
     def __init__(self, embedding_dim=2048, output_dim=16):
         super(B1EPredModelFFN, self).__init__()
-        self.fc1 = nn.Linear(embedding_dim, 2048)
-        self.fc2 = nn.Linear(2048, output_dim)
+        self.fc1 = nn.Linear(embedding_dim, 1024)
+        self.fc2 = nn.Linear(1024, output_dim)
 
     def forward(self, x):
         x = F.relu(self.fc1(x))
@@ -78,8 +80,8 @@ class B1EPredModelFFN(nn.Module):
 class B1ESeqPredModelFFN(nn.Module):
     def __init__(self, embedding_dim=2048, output_dim=16):
         super(B1ESeqPredModelFFN, self).__init__()
-        self.fc1 = nn.Linear(embedding_dim, 2048)
-        self.fc2 = nn.Linear(2048, output_dim)
+        self.fc1 = nn.Linear(embedding_dim, 1024)
+        self.fc2 = nn.Linear(1024, output_dim)
 
     def forward(self, x):
         x = F.relu(self.fc1(x.squeeze()))
@@ -220,7 +222,7 @@ test_data = datavals[split_idx:]
 #
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 num_epochs = 100
-batch_size = 32
+batch_size = 8
 
 if args.emb_style == 'b1e':
     # Create b1e dataset
@@ -255,6 +257,7 @@ elif args.emb_style == 'ble':
 else:
     raise ValueError("Invalid emb_style")
 
+# import pdb; pdb.set_trace()
 # make directory structure pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}/ if it doesnt exist
 if not os.path.exists(f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}'):
     os.makedirs(f'pred_models_{args.basemodel.split("-")[-1]}/{args.zcp_metric}/{args.dataset}')
@@ -269,7 +272,7 @@ else:
         # Train model from scratch
         # Loss and optimizer
         criterion = nn.MSELoss()
-        optimizer = optim.Adam(model.parameters(), lr=0.001)
+        optimizer = optim.AdamW(model.parameters(), lr=0.001)
         T_max = len(train_loader) * num_epochs
         scheduler = CosineAnnealingLR(optimizer, T_max=T_max, eta_min=0)
         # Train the model
@@ -339,7 +342,7 @@ else:
             test_loader = b1e_seq_test_loader[curr_layer]
             model = model_dict[curr_layer]
             criterion = nn.MSELoss()
-            optimizer = optim.Adam(model.parameters(), lr=0.001)
+            optimizer = optim.AdamW(model.parameters(), lr=0.001)
             T_max = len(train_loader) * num_epochs
             scheduler = CosineAnnealingLR(optimizer, T_max=T_max, eta_min=0)
             model.train()

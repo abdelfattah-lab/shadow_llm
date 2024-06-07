@@ -6,7 +6,8 @@ if True:
     tasks_imp_path_dict = dict(zip(tasks, tasks_imp_path))
     zcp_list = ["plainact", "l2_norm"]
     prune_modes = ["perlayer", "global"]
-    predmethods = ["dejavu", "original", "predictor", "predictorL"]
+    # predmethods = ["dejavu", "predictor", "predictorL"]
+    predmethods = ["dejavu", "predictorL"]
     command_list = []
     for task in tasks:
         print(f'######################### Starting Task {task} #########################')
@@ -15,10 +16,12 @@ if True:
             print(f'######################### Starting ZCP {zcp} #########################')
             command_list.append(f'######################### Starting ZCP {zcp} #########################')
             for basemethod in predmethods:
+                # if zcp == 'plainact' and basemethod == 'dejavu':
+                #     continue
                 print(f'######################### Starting Method {basemethod} #########################')
                 command_list.append(f'######################### Starting Method {basemethod} #########################')
                 for prune_mode in prune_modes:
-                    for prune_perc in [50, 60, 70, 80, 90, 92, 94]:
+                    for prune_perc in [30, 40, 50, 60, 70]:
                         base_cmd = f'sbatch --requeue slurmrunner_large.slurm "python main.py --model opt --model_args prune_style={prune_mode},ffn_percent_mask={prune_perc},fcmaskmethod=fc,aggr_all=False,zcp_calc={zcp},pretrained=facebook/opt-30b,model_cache_dir=opt30b_checkpoints,tokenizer_cache_dir=opt30b_tokenizer,mask_heads=1,head_importance_path=zcps/opt-30b/{zcp}_all_5.pkl,head_percent_mask={prune_perc},maskmethod={basemethod},predictor_=all --tasks {task} --output_path results/30b/piqa/0shot_piqa_predictor.txt --batch_size 1 --num_fewshot 0 --method predictor"'
                         command_list.append(base_cmd)
                         print(base_cmd)
@@ -29,7 +32,7 @@ if True:
             f.write(command + "\n")
 
 
-
+exit(0)
 if True:
     zcp_list = ["plainact", "l2_norm"]
     tasks = ["all"]
@@ -43,9 +46,9 @@ if True:
         command_list.append(f'######################### Starting Task {task} #########################')
         for zcp_tom in zcp_list:
             for model_type in model_types:
-                base_cmd = f'sbatch --requeue slurmrunner_large_small.slurm "python emnlp_activation_predictor.py --fewshot {fews} --dataset {task} --dataset_cname {tasks_imp_path_dict[task]} --zcp_metric {zcp_tom} --basemodel opt-30b --execmode train --emb_style {model_type} --rerun"'
+                base_cmd = f'sbatch --requeue slurmrunner.slurm "python emnlp_activation_predictor.py --fewshot {fews} --dataset {task} --dataset_cname {tasks_imp_path_dict[task]} --zcp_metric {zcp_tom} --basemodel opt-30b --execmode train --emb_style {model_type} --rerun"'
                 command_list.append(base_cmd)
-                base_cmd = f'sbatch --requeue slurmrunner_large_small.slurm "python emnlp_activation_ffn_predictor.py --fewshot {fews} --dataset {task} --dataset_cname {tasks_imp_path_dict[task]} --zcp_metric {zcp_tom} --basemodel opt-30b --execmode train --emb_style {model_type} --rerun"'
+                base_cmd = f'sbatch --requeue slurmrunner.slurm "python emnlp_activation_ffn_predictor.py --fewshot {fews} --dataset {task} --dataset_cname {tasks_imp_path_dict[task]} --zcp_metric {zcp_tom} --basemodel opt-30b --execmode train --emb_style {model_type} --rerun"'
                 command_list.append(base_cmd)
                 print(base_cmd)
 

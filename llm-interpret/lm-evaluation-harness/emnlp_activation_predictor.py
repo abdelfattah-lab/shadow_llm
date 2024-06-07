@@ -334,7 +334,7 @@ else:
         # Train model from scratch
         # Loss and optimizer
         criterion = nn.MSELoss()
-        optimizer = optim.Adam(model.parameters(), lr=0.001)
+        optimizer = optim.AdamW(model.parameters(), lr=0.001)
         T_max = len(train_loader) * num_epochs
         scheduler = CosineAnnealingLR(optimizer, T_max=T_max, eta_min=0)
         # Train the model
@@ -404,7 +404,7 @@ else:
             test_loader = b1e_seq_test_loader[curr_layer]
             model = model_dict[curr_layer]
             criterion = nn.MSELoss()
-            optimizer = optim.Adam(model.parameters(), lr=0.001)
+            optimizer = optim.AdamW(model.parameters(), lr=0.001)
             T_max = len(train_loader) * num_epochs
             scheduler = CosineAnnealingLR(optimizer, T_max=T_max, eta_min=0)
             model.train()

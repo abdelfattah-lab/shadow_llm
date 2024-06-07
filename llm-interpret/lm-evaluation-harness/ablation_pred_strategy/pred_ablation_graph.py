@@ -33,7 +33,10 @@ data.columns = ['pruning_strategy', 'sparsity', 'proxy', 'strategy', 'perplexity
 data = data[data['strategy'] != 'original']
 # # only keep proxy == "plaianct"
 # data = data[data['proxy'] == 'plainact']
-
+# for the dejavu, keep only l2_norm
+# data2 = data[(data['proxy'] == 'l2_norm') & (data['strategy'] == 'dejavu')]
+# data1 = data[(data['proxy'] == 'fisher') & (data['strategy'] == 'predictorL')]
+# data = pd.concat([data1, data2])
 
 # Update strategy names
 data['strategy'] = data['strategy'].replace({'predictorL': 'ShadowLLM', 'dejavu': 'DejaVu'})

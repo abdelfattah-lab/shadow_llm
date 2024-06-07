@@ -86,11 +86,12 @@ def main():
             nspmodel_args = SimpleNamespace(**{item.split('=')[0]: item.split('=')[1] for item in model_args.split(',')})
             task_name = task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH
             org_task_name = name
+            mname = nspmodel_args.pretrained.split("/")[-1]
             # check if zcps/opt-{model_size}/{zcp_calc}_{task_name}_{num_fewshot}.pkl exists
-            if os.path.exists(f"zcps/opt-1.3b/{nspmodel_args.zcp_calc}_{task_name}_{args.num_fewshot}.pkl"):
+            if os.path.exists(f"zcps/{mname}/{nspmodel_args.zcp_calc}_{task_name}_{args.num_fewshot}.pkl"):
                 print("Already calculated for ", task_name, " with ", nspmodel_args.zcp_calc)
                 exit(0)
-            elif os.path.exists(f"zcps/opt-1.3b/{nspmodel_args.zcp_calc}_{org_task_name}_{args.num_fewshot}.pkl"):
+            elif os.path.exists(f"zcps/{mname}/{nspmodel_args.zcp_calc}_{org_task_name}_{args.num_fewshot}.pkl"):
                 print("Already calculated for ", org_task_name, " with ", nspmodel_args.zcp_calc)
                 exit(0)
 
