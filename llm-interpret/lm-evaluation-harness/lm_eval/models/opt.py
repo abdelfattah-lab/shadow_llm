@@ -481,7 +481,11 @@ class HFLM(BaseLM):
                 # make all first layer newmask stuff 1
                 self.newmask[0, :] = 1.
                 self.ffn_fc_mask[0, :] = 1.
-                # import pdb; pdb.set_trace()
+                for lix in range(self.newmask.shape[0]):
+                    if lix <= int(0.35 * self.newmask.shape[0]) or lix >= int(0.65 * self.newmask.shape[0]):
+                        self.newmask[lix, :] = 1.
+                        self.ffn_fc_mask[lix, :] = 1.
+                # temporarily, fix sparsity for the first 35% and last 35% of the layer newask and ffn_fc_mask at 
                 self._temp_tracker += 1
                 return self.opt(input_ids = inps, head_mask = self.newmask.half().to(self._device), fc_mask = self.ffn_fc_mask.to(self._device))[0][:, :, :50265]
         else:
