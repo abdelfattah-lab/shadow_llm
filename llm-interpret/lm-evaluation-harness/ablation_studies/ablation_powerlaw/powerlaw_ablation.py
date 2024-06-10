@@ -17,10 +17,11 @@ plt.rcParams.update({
 })
 
 # read every file in /home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3b/ that has "_trace_all_5.pkl"
-filelist = [f for f in os.listdir('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3b/') if "_trace_all_5.pkl" in f]
+# filelist = [f for f in os.listdir('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3b/') if "_trace_all_5.pkl" in f]
+filelist = [f for f in os.listdir('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-30b/') if "_trace_all_5.pkl" in f]
 
 def plot_rank_variance(data, num_elements, title, ylabel, filename):
-    num_layers = 24
+    num_layers = 48
     elements_per_layer = num_elements // num_layers
     impidx = -2 if 'head' in title.lower() else -1
     
@@ -99,12 +100,13 @@ def plot_rank_variance(data, num_elements, title, ylabel, filename):
 
 for filename in tqdm(filelist):
     # if "grad_norm" in filename:
-    with open('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3b/' + filename, 'rb') as f:
+    with open('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-30b/' + filename, 'rb') as f:
         data = pickle.load(f)
-
+    # make powerlaw_ablation directory
+    os.makedirs("powerlaw_ablation", exist_ok=True)
     # Plot for heads
-    plot_rank_variance(data, 24*32, 'Head Activation Rank Variance of OPT-1.3B', 'Rank Variance', f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_variance.pdf')
-    print(f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_variance.pdf' + " saved")
+    plot_rank_variance(data, 48*56, 'Head Activation Rank Variance of OPT-30B', 'Rank Variance', f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_30b_variance.pdf')
+    print(f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_30b_variance.pdf' + " saved")
 
 
 # for filename in tqdm(filelist):

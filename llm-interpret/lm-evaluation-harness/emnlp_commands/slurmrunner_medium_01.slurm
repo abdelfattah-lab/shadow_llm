@@ -1,15 +1,15 @@
 #!/bin/bash
 #SBATCH -J allnasspace
-#SBATCH -o /home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/slurm_logs/rt%j.out
-#SBATCH -e /home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/slurm_logs/rt%j.err
+#SBATCH -o /home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/slurm_13b/rt%j.out
+#SBATCH -e /home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/slurm_13b/rt%j.err
 #SBATCH -N 1
-#SBATCH --mem=400000
+#SBATCH --mem=150000
 #SBATCH -t 48:00:00
 #SBATCH --account=abdelfattah
 #SBATCH --partition=abdelfattah
-#SBATCH --nodelist=abdelfattah-compute-02
-#SBATCH --gres=gpu:5
-#SBATCH -n 16
+#SBATCH --nodelist=abdelfattah-compute-01
+#SBATCH --gres=gpu:2
+#SBATCH -n 4
 
 
 source /share/apps/anaconda3/2021.05/etc/profile.d/conda.sh 
