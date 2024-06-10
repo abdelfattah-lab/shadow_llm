@@ -42,41 +42,22 @@ new_data = pd.DataFrame({'sparsity': sparsity, 'zcp': zcp, 'fewshot': fewshot, '
 # Get unique ZCP values
 unique_zcp = new_data['zcp'].unique()
 
-# # Generate plots for each unique ZCP
-# for z in unique_zcp:
-#     zcp_data = new_data[new_data['zcp'] == z]
-
-#     plt.figure(figsize=(10, 6))
-#     for fs in zcp_data['fewshot'].unique():
-#         fs_data = zcp_data[zcp_data['fewshot'] == fs]
-#         fs_data = fs_data.sort_values('sparsity')
-#         plt.plot(fs_data['sparsity'], fs_data['perplexity'], marker='o', label=f'Fewshot {fs}')
-
-#     plt.xlabel('Sparsity', fontsize=24)
-#     plt.ylabel('Perplexity', fontsize=24)
-#     plt.title(f'ZCP: {z}', fontsize=24)
-#     plt.legend(fontsize=12, loc='best', ncol=1)
-#     plt.grid(True)
-#     plt.tight_layout()
-
-#     # Save the plot as a PDF file
-#     output_path = os.path.join(output_directory, f'{z}.pdf')
-#     plt.savefig(output_path, bbox_inches='tight')
-#     plt.close()
-
 # Generate the Geomean plot
 geomean_data = new_data.groupby(['sparsity', 'fewshot'])['perplexity'].apply(gmean).reset_index()
+# Generate the mean
+# geomean_data = new_data.groupby(['sparsity', 'fewshot'])['perplexity'].mean().reset_index()
 
 plt.figure(figsize=(10, 6))
 for fs in geomean_data['fewshot'].unique():
     fs_data = geomean_data[geomean_data['fewshot'] == fs]
     fs_data = fs_data.sort_values('sparsity')
-    plt.plot(fs_data['sparsity'], fs_data['perplexity'], marker='o', label=f'Fewshot-{fs}')
+    plt.plot(fs_data['sparsity'], fs_data['perplexity'], marker='o', label=f'{fs}-shot')
 
 plt.xlabel('Sparsity (%)', fontsize=24)
 plt.ylabel('Perplexity', fontsize=24)
-plt.title('Geometric Mean of Perplexity', fontsize=24)
-plt.legend(fontsize=16, loc='upper center', ncol=3)
+plt.title('Geometric Mean of Perplexity On WikiText2 (OPT-1.3b)', fontsize=24)
+plt.legend(fontsize=22, loc='upper center', ncol=3)
+# plt.yscale('log')
 plt.grid(True)
 plt.tight_layout()
 

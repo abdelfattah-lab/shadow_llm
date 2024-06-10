@@ -18,10 +18,13 @@ plt.rcParams.update({
 
 # read every file in /home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3b/ that has "_trace_all_5.pkl"
 # filelist = [f for f in os.listdir('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3b/') if "_trace_all_5.pkl" in f]
-filelist = [f for f in os.listdir('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-30b/') if "_trace_all_5.pkl" in f]
+filelist = [f for f in os.listdir('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3b/') if "_trace_all_5.pkl" in f]
+
+nlayers = 24
+nheads = 32
 
 def plot_rank_variance(data, num_elements, title, ylabel, filename):
-    num_layers = 48
+    num_layers = nlayers
     elements_per_layer = num_elements // num_layers
     impidx = -2 if 'head' in title.lower() else -1
     
@@ -66,11 +69,11 @@ def plot_rank_variance(data, num_elements, title, ylabel, filename):
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, label='Layer')
-    cbar.set_label('Layer', labelpad=-65, y=0.5, rotation=90)
+    cbar.set_label('Layer', labelpad=-70, y=0.5, rotation=90, fontsize=22)
         # Calculate and add baseline lines
     random_variance = np.var(np.arange(num_elements))
-    ax.axhline(y=random_variance, color='r', linestyle='--')
-    ax.text(num_elements-1, random_variance*0.9, 'Random Activation', color='r', va='top', ha='right', fontweight='bold')
+    ax.axhline(y=random_variance, color='#B22222', linestyle='--')
+    ax.text(num_elements-1, random_variance*0.9, 'Random Activation', color='#B22222', va='top', ha='right', fontweight='bold')
 
     from numpy.random import power
 
@@ -99,14 +102,15 @@ def plot_rank_variance(data, num_elements, title, ylabel, filename):
         plt.savefig(filename, bbox_inches='tight')
 
 for filename in tqdm(filelist):
-    # if "grad_norm" in filename:
-    with open('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-30b/' + filename, 'rb') as f:
+    if "grad_norm" not in filename:
+        continue
+    with open('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3b/' + filename, 'rb') as f:
         data = pickle.load(f)
     # make powerlaw_ablation directory
     os.makedirs("powerlaw_ablation", exist_ok=True)
     # Plot for heads
-    plot_rank_variance(data, 48*56, 'Head Activation Rank Variance of OPT-30B', 'Rank Variance', f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_30b_variance.pdf')
-    print(f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_30b_variance.pdf' + " saved")
+    plot_rank_variance(data, nlayers*nheads, 'Head Activation Rank Variance of OPT-1.3b', 'Rank Variance', f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_1.3b_variance.pdf')
+    print(f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_1.3b_variance.pdf' + " saved")
 
 
 # for filename in tqdm(filelist):

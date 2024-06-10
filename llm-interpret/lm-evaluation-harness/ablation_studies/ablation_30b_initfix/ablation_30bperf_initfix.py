@@ -43,7 +43,7 @@ plt.rcParams.update({
     'grid.linestyle': '--'
 })
 
-fig, ax = plt.subplots(figsize=(10, 5))
+fig, ax = plt.subplots(figsize=(10, 6))
 
 prune_mode = prune_modes[0]  # Only considering the first prune_mode for a single plot
 
@@ -64,10 +64,10 @@ for zcp in zcps:
                 # Make normal dot plot
                 ax.plot(subset['sparsity'], subset['perplexity'], marker='o', label=f'{predmap[predmethod]} ({zcpmap[zcp]})')
 
-ax.set_title(f'{pmode_map[prune_mode]} Pruning On OPT-30B', fontsize=24)
+ax.set_title(f'{pmode_map[prune_mode]} Pruning Of Middle Layers On OPT-30B', fontsize=24)
 ax.set_xlabel('Sparsity (%)', fontsize=24)
 ax.set_ylabel('Perplexity', fontsize=24)
-ax.legend(fontsize=20, loc='upper left', ncol=1)
+ax.legend(fontsize=22, loc='upper left', ncol=1)
 ax.grid(True)
 plt.tight_layout()
 

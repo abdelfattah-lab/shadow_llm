@@ -221,8 +221,8 @@ train_data = datavals[:split_idx]
 test_data = datavals[split_idx:]
 #
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-num_epochs = 100
-batch_size = 8
+num_epochs = 20
+batch_size = 16
 
 if args.emb_style == 'b1e':
     # Create b1e dataset
@@ -292,7 +292,8 @@ else:
             print(f"Epoch {epoch+1}, Loss: {loss.item()}")
 
             test_loss = 0
-            kdt_register = []
+            tau = 0
+            if epoch % 20 == 0: kdt_register = []
             with torch.no_grad():
                 track = 0
                 for inputs, targets in test_loader:
@@ -302,12 +303,12 @@ else:
                     outputs = model(inputs)
                     test_register_ = outputs.cpu().tolist()
                     target_register_ = targets.cpu().tolist()
-                    kdt_register.extend([scipy.stats.spearmanr(test_register_[i], target_register_[i])[0] for i in range(len(test_register_))])
+                    if epoch % 20 == 0: kdt_register.extend([scipy.stats.spearmanr(test_register_[i], target_register_[i])[0] for i in range(len(test_register_))])
                     loss = criterion(outputs, targets)
                     test_loss += loss.item()
                     track += 1
             # Average kendall tau ranking across all inputs
-            tau = sum(kdt_register)/len(kdt_register)
+            if epoch % 20 == 0: tau = sum(kdt_register)/len(kdt_register)
             print(f"Epoch {epoch+1}, Test Loss: {test_loss}, Spearman R: {tau}")
 
         # Testing loop

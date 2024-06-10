@@ -30,28 +30,15 @@ data.to_csv(os.path.join(output_directory, 'all_data.csv'))
 data = data.iloc[:, [0, 1, 4, 11, 16]]
 data.columns = ['pruning_strategy', 'sparsity', 'proxy', 'strategy', 'perplexity']
 # if strategy == 'original', remove it
-data = data[data['strategy'] != 'original']
-# # only keep proxy == "plaianct"
-# data = data[data['proxy'] == 'plainact']
-# for the dejavu, keep only l2_norm
-# data2 = data[(data['proxy'] == 'l2_norm') & (data['strategy'] == 'dejavu')]
-# data1 = data[(data['proxy'] == 'fisher') & (data['strategy'] == 'predictorL')]
-# data = pd.concat([data1, data2])
-
-# Update strategy names
-data['strategy'] = data['strategy'].replace({'predictorL': 'ShadowLLM', 'dejavu': 'DejaVu'})
-
-# # keep proxy == "plainact" for "predictorL"
-# data1 = data[(data['proxy'] == 'fisher') & (data['strategy'] == 'ShadowLLM')]
-# # only keep proxy == "l2_norm" for "dejavu"
-# data = data[(data['proxy'] == 'l2_norm') & (data['strategy'] == 'DejaVu')]
-# # Combine the two dataframes
-# data = pd.concat([data1, data])
-# Take the average across all proxies
-data_grouped = data.groupby(['sparsity', 'pruning_strategy', 'strategy']).mean().reset_index()
+data = data[~data['strategy'].isin(['original', 'predictor'])]
+data['perplexity'] = pd.to_numeric(data['perplexity'], errors='coerce')
+data_grouped = data.groupby(['sparsity', 'pruning_strategy', 'strategy'])['perplexity'].mean().reset_index()
 
 # Sort by sparsity for proper line plotting
 data_grouped = data_grouped.sort_values(by=['sparsity'])
+# Update strategy names
+data['strategy'] = data['strategy'].replace({'predictorL': 'ShadowLLM', 'dejavu': 'DejaVu'})
+data_grouped['strategy'] = data_grouped['strategy'].replace({'predictorL': 'ShadowLLM', 'dejavu': 'DejaVu'})
 
 # Plotting
 fig, ax = plt.subplots(figsize=(10, 6))
@@ -61,27 +48,39 @@ line_styles = {'global': '--', 'perlayer': '-'}
 for (pruning_strategy, strategy), grp in data_grouped.groupby(['pruning_strategy', 'strategy']):
     psc = "Global" if pruning_strategy == "global" else "Per-layer"
     label = f'{strategy} ({psc})'
-    if "predictor" in label:
-        continue
+    # if "predictor" in label:
+    #     continue
     line_style = line_styles[pruning_strategy] if pruning_strategy in line_styles else '-'
     ax = grp.plot(ax=ax, kind='line', x='sparsity', y='perplexity', label=label, marker='o', linestyle=line_style)
 
-plt.title('Perplexity vs Sparsity on WikiText2 For OPT-1.3B')
-# Y Axis label accuracy, 
-# X axis label "Sparsity"
-plt.ylabel('Perplexity')
-plt.xlabel('Sparsity (%)')
-# Set legend fontsize as 18
-# plt.legend(fontsize=18)
-# Add grid
+plt.title('Perplexity vs Sparsity on WikiText2', fontsize=24)
+plt.ylabel('Perplexity', fontsize=24)
+plt.xlabel('Sparsity (%)', fontsize=24)
 
 # Reorder legend
 handles, labels = ax.get_legend_handles_labels()
 order = [labels.index(l) for l in sorted(labels, key=lambda x: ('DejaVu' in x, x), reverse=True)]
-ax.legend([handles[idx] for idx in order], [labels[idx] for idx in order], fontsize=18)
+ax.legend([handles[idx] for idx in order], [labels[idx] for idx in order], fontsize=22)
+
+# plt.yscale('log')
 
 plt.grid(True)
 plt.tight_layout()
 # Save the plot
 plt.savefig(os.path.join(output_directory, 'perplexity_vs_sparsity.pdf'))
 
+
+# # only keep proxy == "plaianct"
+# data = data[data['proxy'] == 'plainact']
+# for the dejavu, keep only l2_norm
+# data2 = data[(data['proxy'] == 'l2_norm') & (data['strategy'] == 'dejavu')]
+# data1 = data[(data['proxy'] == 'fisher') & (data['strategy'] == 'predictorL')]
+# data = pd.concat([data1, data2])
+
+# # keep proxy == "plainact" for "predictorL"
+# data1 = data[(data['proxy'] == 'fisher') & (data['strategy'] == 'ShadowLLM')]
+# # only keep proxy == "l2_norm" for "dejavu"
+# data = data[(data['proxy'] == 'l2_norm') & (data['strategy'] == 'DejaVu')]
+# # Combine the two dataframes
+# data = pd.concat([data1, data])
+# Take the average across all proxies

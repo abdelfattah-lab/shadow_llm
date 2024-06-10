@@ -62,9 +62,9 @@ for i, prune_mode in enumerate(prune_modes):
     ax.set_title(f'{pmode_map[prune_mode]} Pruning On OPT-30B', fontsize=24)
     ax.set_xlabel('Sparsity (%)', fontsize=24)
     ax.set_ylabel('Perplexity', fontsize=24)
-    ax.legend(fontsize=20, loc='upper left', ncol=1)
+    ax.legend(fontsize=22, loc='upper left', ncol=1)
     ax.grid(True)
-    ax.set_yscale("log")
+    # ax.set_yscale("log")
     # ax.tight_layout()
 
 plt.tight_layout()

@@ -4,12 +4,12 @@ import os
 import numpy as np
 from tqdm import tqdm
 
-model_dirs = ['opt-30b']
+model_dirs = ['opt-13b']
 
 for msize in model_dirs:
     dir_to_read = f'zcps/{msize}'
     # Read every pkl file that doesnt contain trace in the name using os.listdir
-    all_files = [os.path.join(dir_to_read, f) for f in os.listdir(dir_to_read) if f.endswith('.pkl') and 'trace' not in f and 'fc1' not in f and 'plainact' in f]
+    all_files = [os.path.join(dir_to_read, f) for f in os.listdir(dir_to_read) if f.endswith('.pkl') and 'trace' not in f and 'fc1' not in f]
     # convert all_files to a dictionary of lists, with fname.split("_")[0] as key
     data_dict = {}
     for file in tqdm(all_files):
@@ -39,7 +39,7 @@ for msize in model_dirs:
 for msize in model_dirs:
     dir_to_read = f'zcps/{msize}'
     # Read every pkl file that doesnt contain trace in the name using os.listdir
-    all_files = [os.path.join(dir_to_read, f) for f in os.listdir(dir_to_read) if f.endswith('.pkl') and 'trace' not in f and 'fc1' in f and 'plainact' in f]
+    all_files = [os.path.join(dir_to_read, f) for f in os.listdir(dir_to_read) if f.endswith('.pkl') and 'trace' not in f and 'fc1' in f]
     # convert all_files to a dictionary of lists, with fname.split("_")[0] as key
     data_dict = {}
     for file in tqdm(all_files):
@@ -76,7 +76,7 @@ for msize in model_dirs:
     os.makedirs(f'temp_{msize}', exist_ok=True)
     dir_to_read = f'zcps/{msize}'
     # Read every pkl file that doesnt contain trace in the name using os.listdir
-    all_files = [os.path.join(dir_to_read, f) for f in os.listdir(dir_to_read) if f.endswith('.pkl') and 'trace' in f and 'plainact' in f]
+    all_files = [os.path.join(dir_to_read, f) for f in os.listdir(dir_to_read) if f.endswith('.pkl') and 'trace' in f]
     # convert all_files to a dictionary of lists, with fname.split("_")[0] as key
     for file in tqdm(all_files):
         fname = file.split("/")[-1]

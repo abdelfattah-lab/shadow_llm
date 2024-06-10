@@ -68,7 +68,7 @@ for i, prune_mode in enumerate(prune_modes):
     ax.set_title(f'{pmode_map[prune_mode]} Pruning On OPT-13B', fontsize=24)
     ax.set_xlabel('Sparsity (%)', fontsize=24)
     ax.set_ylabel('Perplexity', fontsize=24)
-    ax.legend(fontsize=20, loc='upper left', ncol=1)
+    ax.legend(fontsize=22, loc='upper left', ncol=1)
     ax.grid(True)
     # ax.set_yscale("log")
     # ax.tight_layout()
@@ -123,7 +123,7 @@ plt.rcParams.update({
     'grid.linestyle': '--'
 })
 
-plt.figure(figsize=(10, 5))
+plt.figure(figsize=(10, 6))
 
 prune_mode = "global"
 for zcp in zcps:
@@ -143,11 +143,13 @@ for zcp in zcps:
 plt.title(f'{pmode_map[prune_mode]} Pruning On OPT-13B', fontsize=24)
 plt.xlabel('Sparsity (%)', fontsize=24)
 plt.ylabel('Perplexity', fontsize=24)
-plt.legend(fontsize=20, loc='upper left', ncol=1)
+plt.legend(fontsize=22, loc='upper left', ncol=1)
 plt.grid(True)
 
+plt.tight_layout()
 # Save the plot as a PDF file
 output_path = os.path.join(output_directory, 'global_perplexity_plot.pdf')
+print("Global perplexity plot saved at:", output_path)
 plt.savefig(output_path, bbox_inches='tight')
 
 plt.cla()
@@ -246,7 +248,7 @@ ax.grid(True)
 
 # Creating custom legends for the tasks
 task_legend_labels = {task: task.upper() for task in tasklists}
-ax.legend(fontsize=20, loc='upper left', ncol=1)
+ax.legend(fontsize=22, loc='upper left', ncol=1)
 
 plt.tight_layout()
 # Save the plot as a PDF file
