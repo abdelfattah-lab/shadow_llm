@@ -1,0 +1,21 @@
+{
+  "results": {
+    "wikitext": {
+      "bits_per_byte": 1.3716745392357355
+    }
+  },
+  "versions": {
+    "wikitext": 1
+  },
+  "config": {
+    "model": "opt",
+    "model_args": "prune_style=perlayer,ffn_percent_mask=40,fcmaskmethod=fc,aggr_all=False,zcp_calc=l2_norm,pretrained=facebook/opt-1.3b,model_cache_dir=opt1.3b_checkpoints,tokenizer_cache_dir=opt1.3b_tokenizer,mask_heads=1,head_importance_path=zcps/opt-1.3b/l2_norm_all_0.pkl,head_percent_mask=40,maskmethod=original,predictor_=wikitext",
+    "num_fewshot": 0,
+    "batch_size": 1,
+    "device": null,
+    "no_cache": false,
+    "limit": null,
+    "bootstrap_iters": 100000,
+    "description_dict": {}
+  }
+}

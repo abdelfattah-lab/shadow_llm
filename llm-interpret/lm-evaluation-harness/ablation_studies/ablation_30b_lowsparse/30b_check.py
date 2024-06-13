@@ -53,15 +53,10 @@ for i, prune_mode in enumerate(prune_modes):
                 (combined_data['predmethod'] == predmethod)
             ]
             if not subset.empty:
-                # only plot if f'{zcp}_{predmethod}' is in ["plainact_predictorL", "l2_norm_dejavu"]
                 if f'{zcp}_{predmethod}' in ["plainact_predictorL", "l2_norm_dejavu"]:
-                    # sort by sparsity
                     subset = subset.sort_values(by='sparsity')
-                    # if i == 0:
-                        # remove sparsity > 50
                     subset = subset[subset['sparsity'] <= 50]
                     ax.plot(subset['sparsity'], subset['perplexity'], marker='o', label=f'{predmap[predmethod]} ({zcpmap[zcp]})')
-                    # ax.plot(subset['sparsity'], subset['perplexity'], marker=None, linestyle='-', label=f'{predmap[predmethod]} ({zcpmap[zcp]})')
 
     
     ax.set_title(f'{pmode_map[prune_mode]} Pruning On OPT-30B', fontsize=24)
@@ -75,11 +70,7 @@ for i, prune_mode in enumerate(prune_modes):
         ax.set_ylim(10, 15)
 
     ax.grid(True)
-    # ax.set_yscale("log")
-    # ax.tight_layout()
-
 plt.tight_layout()
-# Save the stacked plot as a PDF file
 output_path = os.path.join(output_directory, 'stacked_perplexity_plots.pdf')
 plt.savefig(output_path, bbox_inches='tight')
 plt.close()
