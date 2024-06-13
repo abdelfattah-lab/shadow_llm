@@ -31,16 +31,7 @@ proxy_name_dict = {
 }
 
 plt.figure(figsize=(10, 6 ))
-# Use a more muted color palette
-# colors = plt.cm.cividis(np.linspace(0, 1, len(proxy_name_dict)+1))
 colors = plt.cm.viridis(np.linspace(0, 1, len(proxy_name_dict)+1))
-# colors = plt.cm.inferno(np.linspace(0, 1, len(proxy_name_dict)+1))
-
-# colors = plt.cm.magma(np.linspace(0, 1, len(proxy_name_dict)+1))
-# colors = plt.cm.coolwarm(np.linspace(0, 1, len(proxy_name_dict)+1))
-
-# colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-# colors = plt.cm.Paired(np.linspace(0, 1, len(proxy_name_dict)+1))
 
 # Replace proxy names in zcp_metric
 data['zcp_metric'] = data['zcp_metric'].map(proxy_name_dict)
@@ -54,7 +45,7 @@ plt.xlabel('Average Spearman-Rho', fontsize=24)
 plt.xticks(fontsize=16)
 plt.yticks(fontsize=20)
 plt.xlim(left=np.min(data['tau']) * 0.97, right=np.max(data['tau']) * 1.03)
-plt.title('ShadowLLM Predictive Performance Across Proxies', fontsize=24)
+plt.title('Predictor Performance On Pruning Criteria', fontsize=24)
 plt.tight_layout()
 plt.savefig('proxy_pred_goodness.pdf')
 plt.show()

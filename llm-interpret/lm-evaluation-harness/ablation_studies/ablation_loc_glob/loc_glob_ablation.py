@@ -48,7 +48,8 @@ line_styles = {'global': '-', 'perlayer': '--'}
 
 for (pruning_strategy, strategy), grp in data_grouped.groupby(['pruning_strategy', 'strategy']):
     psc = "Global" if pruning_strategy == "global" else "Local"
-    label = f'{strategy} {psc} Pruning'
+    # label = f'{strategy} {psc} Pruning'
+    label = f'{psc} Pruning'
     line_style = line_styles[pruning_strategy] if pruning_strategy in line_styles else '-'
     ax = grp.plot(ax=ax, kind='line', x='sparsity', y='perplexity', label=label, marker='o', linestyle=line_style)
 
@@ -65,19 +66,3 @@ plt.grid(True)
 plt.tight_layout()
 # Save the plot
 plt.savefig(os.path.join(output_directory, 'perplexity_vs_sparsity.pdf'))
-
-
-# # only keep proxy == "plaianct"
-# data = data[data['proxy'] == 'plainact']
-# for the dejavu, keep only l2_norm
-# data2 = data[(data['proxy'] == 'l2_norm') & (data['strategy'] == 'dejavu')]
-# data1 = data[(data['proxy'] == 'fisher') & (data['strategy'] == 'predictorL')]
-# data = pd.concat([data1, data2])
-
-# # keep proxy == "plainact" for "predictorL"
-# data1 = data[(data['proxy'] == 'fisher') & (data['strategy'] == 'ShadowLLM')]
-# # only keep proxy == "l2_norm" for "dejavu"
-# data = data[(data['proxy'] == 'l2_norm') & (data['strategy'] == 'DejaVu')]
-# # Combine the two dataframes
-# data = pd.concat([data1, data])
-# Take the average across all proxies

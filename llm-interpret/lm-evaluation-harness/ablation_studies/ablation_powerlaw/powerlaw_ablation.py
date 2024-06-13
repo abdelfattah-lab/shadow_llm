@@ -16,8 +16,6 @@ plt.rcParams.update({
     'grid.linestyle': '--'
 })
 
-# read every file in /home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3b/ that has "_trace_all_5.pkl"
-# filelist = [f for f in os.listdir('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3b/') if "_trace_all_5.pkl" in f]
 filelist = [f for f in os.listdir('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3b/') if "_trace_all_5.pkl" in f]
 
 nlayers = 24
@@ -104,57 +102,10 @@ def plot_rank_variance(data, num_elements, title, ylabel, filename):
 for filename in tqdm(filelist):
     if "grad_norm" not in filename:
         continue
-    with open('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3B/' + filename, 'rb') as f:
+    with open('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3b/' + filename, 'rb') as f:
         data = pickle.load(f)
     # make powerlaw_ablation directory
     os.makedirs("powerlaw_ablation", exist_ok=True)
     # Plot for heads
     plot_rank_variance(data, nlayers*nheads, 'Head Activation Rank Variance of OPT-1.3B', 'Rank Variance', f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_1.3B_variance.pdf')
     print(f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_1.3B_variance.pdf' + " saved")
-
-
-# for filename in tqdm(filelist):
-#     with open('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3B/' + filename, 'rb') as f:
-#         data = pickle.load(f)
-#     # Plot for FFN neurons
-#     plot_rank_variance(data, 24*8192, 'Variance of Ranks Across FFN Neurons', 'Rank Variance', f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_ffn_variance.png')
-#     print(f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_ffn_variance.png' + " saved")
-
-
-# # Normalize rank counts to get probabilities
-# rank_probs = rank_counts / np.sum(rank_counts, axis=1, keepdims=True)
-# plt.figure(figsize=(12, 8))
-# # sns.heatmap(rank_probs, cmap="YlGnBu", cbar=True, xticklabels=range(1, num_heads + 1), yticklabels=range(1, num_heads + 1))
-# sns.heatmap(rank_probs, cmap="YlGnBu", cbar=True)
-# plt.xlabel('Rank')
-# plt.ylabel('Head')
-# plt.title('Heatmap of Rank Stability Across Heads')
-# plt.savefig("powerlaw_ablation/heatmap.png", dpi=600)
-
-# # Assuming data is a list of samples where each sample[-1] is a tensor of shape (24, 32)
-# activations = np.zeros((24, 32))
-
-# for sidx, sample in data.items():
-#     activations += sample[-2].numpy()
-
-# import os
-# os.makedirs("powerlaw_ablation", exist_ok=True)
-# # Flatten the activations to a single vector
-# flattened_activations = activations.flatten()
-# plt.figure(figsize=(10, 6))
-# plt.hist(flattened_activations, bins=50, density=True)
-# plt.xlabel('Activation Magnitude')
-# plt.ylabel('Frequency')
-# plt.title('Histogram of Head Activations')
-# # plt.show()
-# plt.savefig("powerlaw_ablation/headact.pdf")
-# sorted_activations = np.sort(flattened_activations)[::-1]
-# ranks = np.arange(1, len(sorted_activations) + 1)
-
-# plt.figure(figsize=(10, 6))
-# plt.loglog(ranks, sorted_activations, marker='o', linestyle='none')
-# plt.xlabel('Rank')
-# plt.ylabel('Activation Magnitude')
-# plt.title('Log-Log Plot of Head Activations')
-# # plt.show()
-# plt.savefig("powerlaw_ablation/loglog.pdf")
