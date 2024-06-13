@@ -1,0 +1,1 @@
+perlayer,60,fc,False,l2_norm,facebook/opt-30b,opt30b_checkpoints,opt30b_tokenizer,1,zcps/opt-30b/l2_norm_all_5.pkl,60,predictorL,all,wikitext,wikitext,wikitext,482.0990869338831,3.1751182341029898,1.666810315531444

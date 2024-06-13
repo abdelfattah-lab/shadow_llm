@@ -1,0 +1,1 @@
+perlayer,30,fc,False,grad_norm,facebook/opt-1.3b,opt1.3b_checkpoints,opt1.3b_tokenizer,1,zcps/opt-1.3b/grad_norm_all_5.pkl,30,original,piqa,wikitext,wikitext,wikitext,51.69216987478792,2.0913128000993706,1.0644088636499183

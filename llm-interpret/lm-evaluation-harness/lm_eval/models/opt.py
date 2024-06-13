@@ -10,12 +10,13 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 
-
+glob_n = 2048
+glob_n_h = 2048
 class B1EPredModelFFN(nn.Module):
     def __init__(self, embedding_dim=2048, output_dim=16):
         super(B1EPredModelFFN, self).__init__()
-        self.fc1 = nn.Linear(embedding_dim, 2048)
-        self.fc2 = nn.Linear(2048, output_dim)
+        self.fc1 = nn.Linear(embedding_dim, glob_n)
+        self.fc2 = nn.Linear(glob_n, output_dim)
 
     def forward(self, x):
         x = F.relu(self.fc1(x))
@@ -25,8 +26,8 @@ class B1EPredModelFFN(nn.Module):
 class B1ESeqPredModelFFN(nn.Module):
     def __init__(self, embedding_dim=2048, output_dim=16):
         super(B1ESeqPredModelFFN, self).__init__()
-        self.fc1 = nn.Linear(embedding_dim, 2048)
-        self.fc2 = nn.Linear(2048, output_dim)
+        self.fc1 = nn.Linear(embedding_dim, glob_n)
+        self.fc2 = nn.Linear(glob_n, output_dim)
 
     def forward(self, x):
         x = F.relu(self.fc1(x.squeeze()))
@@ -37,8 +38,8 @@ class B1ESeqPredModelFFN(nn.Module):
 class B1EPredModel(nn.Module):
     def __init__(self, embedding_dim=2048, output_dim=16):
         super(B1EPredModel, self).__init__()
-        self.fc1 = nn.Linear(embedding_dim, 2048)
-        self.fc2 = nn.Linear(2048, output_dim)
+        self.fc1 = nn.Linear(embedding_dim, glob_n_h)
+        self.fc2 = nn.Linear(glob_n_h, output_dim)
 
     def forward(self, x):
         x = F.relu(self.fc1(x.squeeze()))
@@ -49,8 +50,8 @@ class B1EPredModel(nn.Module):
 class B1ESeqPredModel(nn.Module):
     def __init__(self, embedding_dim=2048, output_dim=16):
         super(B1ESeqPredModel, self).__init__()
-        self.fc1 = nn.Linear(embedding_dim, 2048)
-        self.fc2 = nn.Linear(2048, output_dim)
+        self.fc1 = nn.Linear(embedding_dim, glob_n_h)
+        self.fc2 = nn.Linear(glob_n_h, output_dim)
 
     def forward(self, x):
         x = F.relu(self.fc1(x.squeeze()))
@@ -203,41 +204,47 @@ class HFLM(BaseLM):
         self.headpredictor_dict = {}
         self.fcpredictor_dict = {}
         if self.maskmethod == "predictor":
-            self.headpred_model = B1EPredModel(embedding_dim=2048, output_dim=num_hidden_layers*num_heads)
+            self.headpred_model = B1EPredModel(embedding_dim=self.opt.config.ffn_dim//4, output_dim=num_hidden_layers*num_heads)
             model_path = f'pred_models_{model_size}/{zcp_calc}/{predictor_}/b1e.pt'
             self.headpred_model.load_state_dict(torch.load(model_path))
+            self.headpred_model = nn.DataParallel(self.headpred_model)  # DataParallel wrapping
             # cuda it
             self.headpred_model = self.headpred_model.to(self._device)
             if self.fcmaskmethod == "fc":
-                self.fc_model = B1EPredModelFFN(embedding_dim=2048, output_dim=self.opt.config.ffn_dim*num_hidden_layers)
+                self.fc_model = B1EPredModelFFN(embedding_dim=self.opt.config.ffn_dim//4, output_dim=self.opt.config.ffn_dim*num_hidden_layers)
                 model_size = pretrained.split('-')[-1]
                 model_path = f'pred_models_{model_size}/{zcp_calc}/{predictor_}/b1e_fc1.pt'
                 self.fc_model.load_state_dict(torch.load(model_path))
+                self.fc_model = nn.DataParallel(self.fc_model)  # DataParallel wrapping
                 # cuda it
                 self.fc_model = self.fc_model.to(self._device)
         if self.maskmethod == "predictorL":
-            self.headpred_model = B1EPredModel(embedding_dim=2048, output_dim=num_hidden_layers*num_heads)
+            self.headpred_model = B1EPredModel(embedding_dim=self.opt.config.ffn_dim//4, output_dim=num_hidden_layers*num_heads)
             model_path = f'pred_models_{model_size}/{zcp_calc}/{predictor_}/b1eL.pt'
             self.headpred_model.load_state_dict(torch.load(model_path))
+            self.headpred_model = nn.DataParallel(self.headpred_model)  # DataParallel wrapping
             # cuda it
             self.headpred_model = self.headpred_model.to(self._device)
             if self.fcmaskmethod == "fc":
-                self.fc_model = B1EPredModelFFN(embedding_dim=2048, output_dim=self.opt.config.ffn_dim*num_hidden_layers)
+                self.fc_model = B1EPredModelFFN(embedding_dim=self.opt.config.ffn_dim//4, output_dim=self.opt.config.ffn_dim*num_hidden_layers)
                 model_size = pretrained.split('-')[-1]
                 model_path = f'pred_models_{model_size}/{zcp_calc}/{predictor_}/b1eL_fc1.pt'
                 self.fc_model.load_state_dict(torch.load(model_path))
+                self.fc_model = nn.DataParallel(self.fc_model)  # DataParallel wrapping
                 # cuda it
                 self.fc_model = self.fc_model.to(self._device)
         if self.maskmethod == "dejavu":
             for layer in range(num_hidden_layers):
-                predm_ = B1ESeqPredModel(embedding_dim=2048 , output_dim=num_heads)
+                predm_ = B1ESeqPredModel(embedding_dim=self.opt.config.ffn_dim//4 , output_dim=num_heads)
                 predm_.load_state_dict(torch.load(f'pred_models_{model_size}/{zcp_calc}/{predictor_}/b1e_seq_{layer}.pt'))
+                predm_ = nn.DataParallel(predm_)
                 predm_ = predm_.to(self._device)
                 self.headpredictor_dict[layer] = predm_
             if self.fcmaskmethod == "fc":
                 for layer in range(num_hidden_layers):
-                    predm_ = B1ESeqPredModelFFN(embedding_dim=2048 , output_dim=self.opt.config.ffn_dim)
+                    predm_ = B1ESeqPredModelFFN(embedding_dim=self.opt.config.ffn_dim//4 , output_dim=self.opt.config.ffn_dim)
                     predm_.load_state_dict(torch.load(f'pred_models_{model_size}/{zcp_calc}/{predictor_}/b1e_seq_fc1_{layer}.pt'))
+                    predm_ = nn.DataParallel(predm_)
                     predm_ = predm_.to(self._device)
                     self.fcpredictor_dict[layer] = predm_
 
@@ -303,6 +310,7 @@ class HFLM(BaseLM):
                     )
                     pred_inp = context_layer_val[:, -1, :].squeeze().float()
                     pred_inp = (pred_inp - pred_inp.min()) / (pred_inp.max() - pred_inp.min())
+                    pred_inp = pred_inp if len(pred_inp.shape) == 2 else pred_inp.unsqueeze(0)
                     himp_vs = self.headpred_model(pred_inp)
                     
                     if self.prune_style == "perlayer":
@@ -384,6 +392,7 @@ class HFLM(BaseLM):
                         for layer_idx, context_layer_val in enumerate(context_layer_vals):
                             pred_inp = context_layer_val[:, -1, :].squeeze().float()
                             pred_inp = (pred_inp - pred_inp.min()) / (pred_inp.max() - pred_inp.min())
+                            pred_inp = pred_inp if len(pred_inp.shape) == 2 else pred_inp.unsqueeze(0)
                             himp_v = self.headpredictor_dict[layer_idx](pred_inp)
                             _, head_indices = torch.sort(himp_v.view(-1))
                             head_indices = head_indices[: int(self.head_percent_mask) * len(head_indices) // 100]
@@ -399,21 +408,27 @@ class HFLM(BaseLM):
                                 self.ffn_fc_mask[layer_idx] = local_fcmask
                     elif self.prune_style == "global":
                         self.newmask = self.newmask.view(-1)
-                        himp_vs = torch.cat([self.headpredictor_dict[layer_idx](context_layer_vals[layer_idx][:, -1, :].squeeze().float()) for layer_idx in range(len(context_layer_vals))], dim = 0)
+                        inpprep = [context_layer_vals[layer_idx][:, -1, :].squeeze().float() for layer_idx in range(len(context_layer_vals))]
+                        inpprep = [xz if len(xz.shape) == 2 else xz.unsqueeze(0) for xz in inpprep]
+                        himp_vs = torch.cat([self.headpredictor_dict[layer_idx](inpprep[layer_idx]) for layer_idx in range(len(context_layer_vals))], dim = 0)
                         _, head_indices = torch.sort(himp_vs.view(-1))
                         head_indices = head_indices[: int(self.head_percent_mask) * len(head_indices) // 100]
                         self.newmask[head_indices] = 0.
                         self.newmask = self.newmask.view(old_head_shape)
                         if self.fcmaskmethod == "fc":
                             self.ffn_fc_mask = self.ffn_fc_mask.view(-1)
-                            fimp_vs = torch.cat([self.fcpredictor_dict[layer_idx](context_layer_vals[layer_idx][:, -1, :].squeeze().float()) for layer_idx in range(len(context_layer_vals))], dim = 0)
+                            inpprep = [context_layer_vals[layer_idx][:, -1, :].squeeze().float() for layer_idx in range(len(context_layer_vals))]
+                            inpprep = [xz if len(xz.shape) == 2 else xz.unsqueeze(0) for xz in inpprep]
+                            fimp_vs = torch.cat([self.fcpredictor_dict[layer_idx](inpprep[layer_idx]) for layer_idx in range(len(context_layer_vals))], dim = 0)
                             _, f_indices = torch.sort(fimp_vs.view(-1))
                             f_indices = f_indices[: int(self.ffn_percent_mask) * len(f_indices) // 100]
                             self.ffn_fc_mask[f_indices] = 0.
                             self.ffn_fc_mask = self.ffn_fc_mask.view(old_fc_shape)
                     elif self.prune_style == "hybrid":
                         self.newmask = self.newmask.view(-1)
-                        himp_vs = torch.cat([self.headpredictor_dict[layer_idx](context_layer_vals[layer_idx][:, -1, :].squeeze().float()) for layer_idx in range(len(context_layer_vals))], dim = 0)
+                        inpprep = [context_layer_vals[layer_idx][:, -1, :].squeeze().float() for layer_idx in range(len(context_layer_vals))]
+                        inpprep = [xz if len(xz.shape) == 2 else xz.unsqueeze(0) for xz in inpprep]
+                        himp_vs = torch.cat([self.headpredictor_dict[layer_idx](inpprep[layer_idx]) for layer_idx in range(len(context_layer_vals))], dim = 0)
                         _, head_indices = torch.sort(himp_vs.view(-1))
                         imp_head_indices = head_indices[int(self.head_percent_mask) * len(head_indices) // 100 : ]
                         head_indices = head_indices[: int(self.head_percent_mask) * len(head_indices) // 100]
@@ -432,7 +447,9 @@ class HFLM(BaseLM):
                             self.newmask[layer_idx][top_head_indices] = 1.
                         if self.fcmaskmethod == "fc":
                             self.ffn_fc_mask = self.ffn_fc_mask.view(-1)
-                            fimp_vs = torch.cat([self.fcpredictor_dict[layer_idx](context_layer_vals[layer_idx][:, -1, :].squeeze().float()) for layer_idx in range(len(context_layer_vals))], dim = 0)
+                            inpprep = [context_layer_vals[layer_idx][:, -1, :].squeeze().float() for layer_idx in range(len(context_layer_vals))]
+                            inpprep = [xz if len(xz.shape) == 2 else xz.unsqueeze(0) for xz in inpprep]
+                            fimp_vs = torch.cat([self.fcpredictor_dict[layer_idx](inpprep[layer_idx]) for layer_idx in range(len(context_layer_vals))], dim = 0)
                             _, f_indices = torch.sort(fimp_vs.view(-1))
                             imp_ffn_indices = f_indices[int(self.ffn_percent_mask) * len(f_indices) // 100 : ]
                             f_indices = f_indices[: int(self.ffn_percent_mask) * len(f_indices) // 100]
@@ -453,6 +470,9 @@ class HFLM(BaseLM):
                         raise ValueError("Invalid prune_style")
                 elif self.maskmethod == "kmeans":
                     raise NotImplementedError
+                elif self.maskmethod == "none":
+                    self.newmask = torch.ones_like(self.head_mask)
+                    self.ffn_fc_mask = torch.ones_like(self.ffn_fc_mask)
                 else:
                     raise ValueError("Invalid maskmethod")
                 self.newmask = self.newmask.view(old_head_shape).half().contiguous().to(self._device)
@@ -461,9 +481,17 @@ class HFLM(BaseLM):
                 # make all first layer newmask stuff 1
                 self.newmask[0, :] = 1.
                 self.ffn_fc_mask[0, :] = 1.
-                # import pdb; pdb.set_trace()
+                # for lix in range(self.newmask.shape[0]):
+                #     if lix <= int(0.35 * self.newmask.shape[0]) or lix >= int(0.65 * self.newmask.shape[0]):
+                #         self.newmask[lix, :] = 1.
+                #         self.ffn_fc_mask[lix, :] = 1.
+                # temporarily, fix sparsity for the first 35% and last 35% of the layer newask and ffn_fc_mask at 
                 self._temp_tracker += 1
-                return self.opt(input_ids = inps, head_mask = self.newmask.half().to(self._device), fc_mask = self.ffn_fc_mask.to(self._device))[0][:, :, :50265]
+                resultant_act = self.opt(input_ids = inps, head_mask = self.newmask.half().to(self._device), fc_mask = self.ffn_fc_mask.to(self._device))[0][:, :, :50265]
+                if resultant_act.isnan().any():
+                    import pdb; pdb.set_trace()
+                # return self.opt(input_ids = inps, head_mask = self.newmask.half().to(self._device), fc_mask = self.ffn_fc_mask.to(self._device))[0][:, :, :50265]
+                return resultant_act
         else:
             return self.opt(input_ids = inps, attention_mask = attn_mask, labels = labels).loss
             

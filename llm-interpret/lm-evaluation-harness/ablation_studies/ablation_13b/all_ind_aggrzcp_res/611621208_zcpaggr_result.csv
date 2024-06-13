@@ -1,0 +1,1 @@
+perlayer,50,fc,False,plainact,facebook/opt-13b,opt13b_checkpoints,opt13b_tokenizer,1,zcps/opt-13b/plainact_all_5.pkl,50,predictorL,all,wikitext,wikitext,wikitext,15.40715923941232,1.6676697761019592,0.737833641573098

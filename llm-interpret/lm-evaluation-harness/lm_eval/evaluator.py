@@ -208,11 +208,12 @@ def head_importance(
         nspmodel_args = SimpleNamespace(**{item.split('=')[0]: item.split('=')[1] for item in model_args.split(',')})
         task_name = task.DATASET_NAME if task.DATASET_NAME is not None else task.DATASET_PATH
         org_task_name = name
+        mname = nspmodel_args.pretrained.split("/")[-1]
         # check if zcps/opt-{model_size}/{zcp_calc}_{task_name}_{num_fewshot}.pkl exists
-        if os.path.exists(f"zcps/opt-1.3b/{nspmodel_args.zcp_calc}_{task_name}_{num_fewshot}.pkl"):
+        if os.path.exists(f"zcps/{mname}/{nspmodel_args.zcp_calc}_{task_name}_{num_fewshot}.pkl"):
             print("Already calculated for ", task_name, " with ", nspmodel_args.zcp_calc)
             continue
-        elif os.path.exists(f"zcps/opt-1.3b/{nspmodel_args.zcp_calc}_{org_task_name}_{num_fewshot}.pkl"):
+        elif os.path.exists(f"zcps/{mname}/{nspmodel_args.zcp_calc}_{org_task_name}_{num_fewshot}.pkl"):
             print("Already calculated for ", org_task_name, " with ", nspmodel_args.zcp_calc)
             continue
         else:
@@ -329,7 +330,7 @@ def evaluate(
         # Here, we should limit requests to the latter 70% of the data-set.
         for doc_id, doc in enumerate(itertools.islice(task_docs, 0, limit)):
 
-            # if total_requests >= limit_requests:
+            # if total_requests >= 20:
             #     break  # Stop processing if the limit is reached
 
             if decontaminate and task.should_decontaminate():

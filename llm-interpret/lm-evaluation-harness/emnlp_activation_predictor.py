@@ -278,7 +278,7 @@ max_seq_len = max([data[k][0].shape[1] for k in data])
 embedding_dim = data[0][1][0].shape[-1]
 
 # Shuffle dataset
-split_idx = int(len(data) * 0.9)
+split_idx = int(len(data) * 0.8)
 datavals = list(data.values())
 random.shuffle(datavals)
 train_data = datavals[:split_idx]
@@ -334,7 +334,7 @@ else:
         # Train model from scratch
         # Loss and optimizer
         criterion = nn.MSELoss()
-        optimizer = optim.Adam(model.parameters(), lr=0.001)
+        optimizer = optim.AdamW(model.parameters(), lr=0.001)
         T_max = len(train_loader) * num_epochs
         scheduler = CosineAnnealingLR(optimizer, T_max=T_max, eta_min=0)
         # Train the model
@@ -404,7 +404,7 @@ else:
             test_loader = b1e_seq_test_loader[curr_layer]
             model = model_dict[curr_layer]
             criterion = nn.MSELoss()
-            optimizer = optim.Adam(model.parameters(), lr=0.001)
+            optimizer = optim.AdamW(model.parameters(), lr=0.001)
             T_max = len(train_loader) * num_epochs
             scheduler = CosineAnnealingLR(optimizer, T_max=T_max, eta_min=0)
             model.train()

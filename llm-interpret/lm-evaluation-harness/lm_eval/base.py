@@ -451,7 +451,7 @@ class BaseLM(LM):
                 izjns += 1
                 if any(izjns > threshold for trial_range, threshold in trial_thresholds.items() if trial.number in trial_range):
                     break
-                # if izjns > 500:
+                # if izjns > 10:
                 #     break
                 batch_max_length = torch.max(l_ctx + l_cont).item()
                 inp = inp[:, :batch_max_length]
@@ -568,7 +568,7 @@ class BaseLM(LM):
 
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 500:
+            if izjns > 10:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -673,7 +673,10 @@ class BaseLM(LM):
             for layer in range(num_hidden_layers):
                 # if layer == 0:
                 # if layer==0: 
-                first_embedding.append(self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :].cpu().detach())
+                emb_trace = self.opt.get_decoder().layers[layer].self_attn.context_layer_val[:, -1, :].cpu().detach()
+                if torch.isnan(emb_trace).any():
+                    import pdb; pdb.set_trace()
+                first_embedding.append(emb_trace)
                 self_attention = self.opt.get_decoder().layers[layer].self_attn
                 attn_x = self_attention.context_layer_val
                 grad_attn_x = self_attention.context_layer_val_grad
@@ -696,6 +699,9 @@ class BaseLM(LM):
                     # plainact_f2info = fc2_weight_grad * fc2_weight
                     # fc2_importance_score[layer] += plainact_f2info.abs().sum(-1).cpu().detach()
             if method == "predictor":
+                # pdb here if anything is nan
+                if torch.isnan(plainact_info).any() or torch.isnan(plainact_f1info).any():
+                    import pdb; pdb.set_trace()
                 # [1, L, E] --> Predictor --> [1, N * H]\
                 encoding_dict[tracker] = (token_embedding, first_embedding, temp_importance_score, temp_fc1_score)
                 tracker += 1
@@ -751,9 +757,9 @@ class BaseLM(LM):
         tracker = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 500:
+            if izjns > 10:
                 break
-            # if izjns > 500:
+            # if izjns > 10:
             #     break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -872,7 +878,7 @@ class BaseLM(LM):
         tracker = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 500:
+            if izjns > 10:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -954,7 +960,7 @@ class BaseLM(LM):
     #     tracker = 0
     #     for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
     #         izjns += 1
-    #         if izjns > 500:
+    #         if izjns > 10:
     #             break
     #         batch_max_length = torch.max(l_ctx + l_cont).item()
     #         inp = inp[:, :batch_max_length]
@@ -1034,7 +1040,7 @@ class BaseLM(LM):
         perhead_class_jacobians = {"l_{}".format(i): {"h_{}".format(h): [] for h in range(num_heads)} for i in range(num_hidden_layers)}
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 500:
+            if izjns > 10:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -1123,7 +1129,7 @@ class BaseLM(LM):
         tracker = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 500:
+            if izjns > 10:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -1241,7 +1247,7 @@ class BaseLM(LM):
         tracker = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 500:
+            if izjns > 10:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -1332,7 +1338,7 @@ class BaseLM(LM):
         izjns = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 500:
+            if izjns > 10:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]
@@ -1426,7 +1432,7 @@ class BaseLM(LM):
         izjns = 0
         for ctx, cont, inp, l_ctx, l_cont in tqdm(dataloader):
             izjns += 1
-            if izjns > 500:
+            if izjns > 10:
                 break
             batch_max_length = torch.max(l_ctx + l_cont).item()
             inp = inp[:, :batch_max_length]

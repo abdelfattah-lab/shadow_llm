@@ -1,0 +1,37 @@
+Teaser Figure (fig:teaser_fig)
+ablation_studies/ablation_13b/teaser_gen.py
+
+Head Activation Rank Figure (fig:powerlaw_ablation)
+ablation_studies/ablation_powerlaw/powerlaw_ablation.py
+
+Local vs. Global WikiText2 OPT1.3b (fig:local_global_1.3b)
+ablation_studies/ablation_loc_glob/loc_glob_ablation.py
+
+Best Model Design (fig:predictor_design_test)
+ablation_studies/ablation_predmodel_bleb1eseq/analyze_pred.py
+
+Local Global Pruning OPT-30B (fig:opt30b_basepplx)
+ablation_studies/ablation_30b_lowsparse/30b_check.py
+
+Downstream Eval 13B Improvement (fig:downstream_13b_eval)
+ablation_studies/ablation_13b/ablation_13b_wikitext.py
+
+Global Pruning OPT-13B (fig:global_13b_pruning)
+ablation_studies/ablation_13b/ablation_13b_wikitext.py
+
+Performance Plots (fig:perf_sparsity, fig:pred_genlen_scaling, fig:pred_perf_scaling)
+ablation_studies/ablation_e2e_performance/gengraph.py
+
+
+WikiText2 Perplexity OPT1.3B (fig:geomean_perplexity_fewshot)
+ablation_studies/ablation_fewshot_lowsparsity/fewshot_aggr_ablation.py
+
+
+Downstream Eval 1.3B Cross-Proxy (fig:geomean_aggr_zcp)
+ablation_studies/ablation_zcpaggr/zcp_boldaggr_ablation.py
+
+WikiText2 Eval 1.3B Cross-Proxy (fig:wikitext_pplx_optsmall)
+ablation_studies/ablation_1.3b_pplx_lowsparsity/zcp_boldaggr_ablation.py
+
+Cross-Proxy Predictor Performance OPT1.3B (fig:predictor_target_test)
+ablation_studies/ablation_proxy_pred_goodness/analyze_pred_horizontal.py
