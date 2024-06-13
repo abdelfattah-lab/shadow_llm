@@ -1,0 +1,21 @@
+{
+  "results": {
+    "piqa": {
+      "acc_norm": 0.5359085963003264
+    }
+  },
+  "versions": {
+    "piqa": 0
+  },
+  "config": {
+    "model": "opt",
+    "model_args": "prune_style=global,ffn_percent_mask=50,fcmaskmethod=fc,aggr_all=False,zcp_calc=plainact,pretrained=facebook/opt-13b,model_cache_dir=opt13b_checkpoints,tokenizer_cache_dir=opt13b_tokenizer,mask_heads=1,head_importance_path=zcps/opt-13b/plainact_all_5.pkl,head_percent_mask=50,maskmethod=predictorL,predictor_=all",
+    "num_fewshot": 0,
+    "batch_size": 1,
+    "device": null,
+    "no_cache": false,
+    "limit": null,
+    "bootstrap_iters": 100000,
+    "description_dict": {}
+  }
+}
