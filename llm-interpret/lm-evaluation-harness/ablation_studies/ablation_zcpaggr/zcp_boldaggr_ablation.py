@@ -16,7 +16,7 @@ plt.rcParams.update({
 # Path to the directory containing CSV files
 directory = 'all_ind_aggrzcp_res'
 
-output_directory = 'zcp_aggr_ablation_bold'
+output_directory = 'zcp_aggr_ablation_bold_clean'
 if not os.path.exists(output_directory):
     os.makedirs(output_directory)
 # Read and combine all CSV files
@@ -39,24 +39,40 @@ data['accuracy'] = accuracies
 # multiply by 100
 data['accuracy'] = data['accuracy'] * 100
 
+# proxy_name_dict = {
+#     "epenas": "EPE-NAS",
+#     "fisher": "Fisher",
+#     "grad_norm": "GradNorm",
+#     "grasp": "GRASP",
+#     "jacov": "Jacov",
+#     "nwot": "NWOT",
+#     "l2_norm": "L2Norm",
+#     "plainact": "PlainAct",
+#     "snip": "SNIP",
+# }
+
+
 proxy_name_dict = {
     "epenas": "EPE-NAS",
-    "fisher": "Fisher",
-    "grad_norm": "GradNorm",
-    "grasp": "GRASP",
-    "jacov": "Jacov",
+    "fisher": r"Fisher ($\frac{d\mathcal{L}}{dA}$, $A$)",
+    "grad_norm": r"GradNorm ($\frac{d\mathcal{L}}{dA}$)",
+    "grasp": r"GRASP ($\frac{d^{2}\mathcal{L}}{dA^{2}}$, $\frac{d\mathcal{L}}{dA}$, $A$)",
+    "jacov": r"Jacov ($\frac{d\mathcal{L}}{dA}$)",
+    "l2_norm": r"L2Norm ($A$)",
     "nwot": "NWOT",
-    "l2_norm": "L2Norm",
-    "plainact": "PlainAct",
+    "plainact": r"PlainAct ($\frac{d\mathcal{L}}{dA}$, $A$)",
     "snip": "SNIP",
 }
 
 data.columns = ['sparsity', 'proxy', 'task', 'accuracy']
+ord_proxies = ["l2_norm", "grad_norm", "jacov", "plainact", "fisher", "grasp"]
+data = data[data['proxy'].isin(ord_proxies)]
+
+mathname = [proxy_name_dict[proxy] for proxy in ord_proxies]
 # replace proxy names with their full names
 data['proxy'] = data['proxy'].replace(proxy_name_dict)
 # remove task rte
 data = data[data['task'] != 'rte']
-
 # For each 'task', make a separate graph but with the same sparsity on x axis, accuracy on y axis, and different proxies as different lines
 for task in data['task'].unique():
     task_data = data[data['task'] == task]
@@ -94,7 +110,10 @@ best_proxies = data.loc[data.groupby('sparsity')['accuracy'].idxmax()]
 
 # Plot the data with sparsity on x axis, accuracy on y axis, and different proxies as different lines
 fig, ax = plt.subplots(figsize=(10, 6))
-for key, grp in data.groupby('proxy'):
+# for key, grp in data.groupby('proxy'):
+# for key, grp in data.groupby('proxy'):
+for key in mathname:
+    grp = data[data['proxy'] == key]    
     linewidth = 2
     linedashed = "--"
     if key in best_proxies['proxy'].values:
@@ -107,10 +126,10 @@ plt.ylim(data['accuracy'].min() * 0.95, data['accuracy'].max() * 1.1)
 # Y Axis label accuracy, X axis label "Sparsity"
 plt.ylabel('Accuracy', fontsize=24)
 plt.xlabel('Sparsity (%)', fontsize=24)
-plt.title('OPT-1.3b Pruning (5-shot)', fontsize=24)
+plt.title('OPT-1.3B Pruning (5-shot)', fontsize=24)
 plt.grid(True)
 # Set legend fontsize as 18
-plt.legend(fontsize=18, ncols=3, loc='upper right')
+plt.legend(fontsize=18, ncols=2, loc='upper right')
 # tight fit plot
 plt.tight_layout()
 # save the plot
@@ -181,7 +200,7 @@ plt.xlabel('Sparsity (%)', fontsize=24)
 
 plt.yscale('log')
 # Set legend fontsize as 18
-plt.legend(fontsize=16, ncols=3, loc='upper left')
+plt.legend(fontsize=18, ncols=3, loc='upper left')
 plt.grid(True)
 plt.tight_layout()
 # save the plot

@@ -29,7 +29,7 @@ colors = plt.cm.viridis(np.linspace(0, 1, len(best_emb_style['emb_style'])+1))
 emb_style_map = {
     "ble": "Full Seq.\nShadowLLM",
     "b1e": "ShadowLLM",
-    "b1e_seq": "DejaVu"
+    "b1e_seq": "DejaVu\nStyle"
 }
 # replace emb_style with their full names
 best_emb_style['emb_style'] = best_emb_style['emb_style'].replace(emb_style_map)
@@ -39,7 +39,7 @@ best_emb_style = best_emb_style.sort_values('tau', ascending=True)
 # Create horizontal bar chart
 bars = plt.barh(best_emb_style['emb_style'], best_emb_style['tau'], color=colors[:len(best_emb_style)], zorder=3, edgecolor='black')
 
-plt.xlabel('Average Tau', fontsize=24)
+plt.xlabel('Average Spearman-Rho', fontsize=24)
 # plt.ylabel('Model Style', fontsize=24)
 plt.xticks(fontsize=16)
 plt.yticks(fontsize=20)

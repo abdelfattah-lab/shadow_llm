@@ -49,7 +49,7 @@ data = data.sort_values('tau', ascending=True)
 # Create horizontal bar chart
 plt.barh(data['zcp_metric'], data['tau'], color=colors, zorder=3, edgecolor='black')
 
-plt.xlabel('Average Tau', fontsize=24)
+plt.xlabel('Average Spearman-Rho', fontsize=24)
 # plt.ylabel('Proxy Predictor', fontsize=24)
 plt.xticks(fontsize=16)
 plt.yticks(fontsize=20)

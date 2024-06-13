@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 
-glob_n = 1024
+glob_n = 2048
 glob_n_h = 2048
 class B1EPredModelFFN(nn.Module):
     def __init__(self, embedding_dim=2048, output_dim=16):
@@ -487,7 +487,11 @@ class HFLM(BaseLM):
                 #         self.ffn_fc_mask[lix, :] = 1.
                 # temporarily, fix sparsity for the first 35% and last 35% of the layer newask and ffn_fc_mask at 
                 self._temp_tracker += 1
-                return self.opt(input_ids = inps, head_mask = self.newmask.half().to(self._device), fc_mask = self.ffn_fc_mask.to(self._device))[0][:, :, :50265]
+                resultant_act = self.opt(input_ids = inps, head_mask = self.newmask.half().to(self._device), fc_mask = self.ffn_fc_mask.to(self._device))[0][:, :, :50265]
+                if resultant_act.isnan().any():
+                    import pdb; pdb.set_trace()
+                # return self.opt(input_ids = inps, head_mask = self.newmask.half().to(self._device), fc_mask = self.ffn_fc_mask.to(self._device))[0][:, :, :50265]
+                return resultant_act
         else:
             return self.opt(input_ids = inps, attention_mask = attn_mask, labels = labels).loss
             

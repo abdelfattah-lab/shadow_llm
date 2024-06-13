@@ -4,12 +4,15 @@ import os
 import numpy as np
 from tqdm import tqdm
 
-model_dirs = ['opt-13b']
+model_dirs = ['opt-1.3b']
+
+
+fs_set = 0
 
 for msize in model_dirs:
     dir_to_read = f'zcps/{msize}'
     # Read every pkl file that doesnt contain trace in the name using os.listdir
-    all_files = [os.path.join(dir_to_read, f) for f in os.listdir(dir_to_read) if f.endswith('.pkl') and 'trace' not in f and 'fc1' not in f]
+    all_files = [os.path.join(dir_to_read, f) for f in os.listdir(dir_to_read) if f.endswith('.pkl') and 'trace' not in f and 'fc1' not in f and f'_{fs_set}' in f]
     # convert all_files to a dictionary of lists, with fname.split("_")[0] as key
     data_dict = {}
     for file in tqdm(all_files):
@@ -34,12 +37,12 @@ for msize in model_dirs:
             import pdb; pdb.set_trace()
     # # save it back as a pickle file with name f'{key}_all_0.pkl'
     for key in tqdm(data_dict):
-        pd.to_pickle(data_dict[key], f'{dir_to_read}/{key}_all_5.pkl')
+        pd.to_pickle(data_dict[key], f'{dir_to_read}/{key}_all_{fs_set}.pkl')
 
 for msize in model_dirs:
     dir_to_read = f'zcps/{msize}'
     # Read every pkl file that doesnt contain trace in the name using os.listdir
-    all_files = [os.path.join(dir_to_read, f) for f in os.listdir(dir_to_read) if f.endswith('.pkl') and 'trace' not in f and 'fc1' in f]
+    all_files = [os.path.join(dir_to_read, f) for f in os.listdir(dir_to_read) if f.endswith('.pkl') and 'trace' not in f and 'fc1' in f and f'_{fs_set}' in f]
     # convert all_files to a dictionary of lists, with fname.split("_")[0] as key
     data_dict = {}
     for file in tqdm(all_files):
@@ -64,7 +67,7 @@ for msize in model_dirs:
             import pdb; pdb.set_trace()
     # # save it back as a pickle file with name f'{key}_all_0.pkl'
     for key in tqdm(data_dict):
-        pd.to_pickle(data_dict[key], f'{dir_to_read}/{key}_fc1_all_5.pkl')
+        pd.to_pickle(data_dict[key], f'{dir_to_read}/{key}_fc1_all_{fs_set}.pkl')
 
 
 
@@ -73,10 +76,10 @@ import torch
 
 # make temp directory if it doesnt exist
 for msize in model_dirs:
-    os.makedirs(f'temp_{msize}', exist_ok=True)
+    os.makedirs(f'temp_fs_{msize}', exist_ok=True)
     dir_to_read = f'zcps/{msize}'
     # Read every pkl file that doesnt contain trace in the name using os.listdir
-    all_files = [os.path.join(dir_to_read, f) for f in os.listdir(dir_to_read) if f.endswith('.pkl') and 'trace' in f]
+    all_files = [os.path.join(dir_to_read, f) for f in os.listdir(dir_to_read) if f.endswith('.pkl') and 'trace' in f and f'_{fs_set}' in f]
     # convert all_files to a dictionary of lists, with fname.split("_")[0] as key
     for file in tqdm(all_files):
         fname = file.split("/")[-1]
@@ -86,7 +89,7 @@ for msize in model_dirs:
             trace_read[tidx] = list(trace_read[tidx])
             trace_read[tidx][1] = [x.cpu() for x in trace_read[tidx][1]]
         torch.cuda.empty_cache()
-        pd.to_pickle(trace_read, f'temp_{msize}/{fname}.pkl')
+        pd.to_pickle(trace_read, f'temp_fs_{msize}/{fname}.pkl')
 
 
 def combine_dicts(ldict):
@@ -100,9 +103,9 @@ def combine_dicts(ldict):
 
 # Now, read the saved files, combine them and save them back
 for msize in model_dirs:
-    dir_to_read = f'temp_{msize}'
+    dir_to_read = f'temp_fs_{msize}'
     # Read every pkl file that doesnt contain trace in the name using os.listdir
-    all_files = [os.path.join(dir_to_read, f) for f in os.listdir(dir_to_read) if f.endswith('.pkl')]
+    all_files = [os.path.join(dir_to_read, f) for f in os.listdir(dir_to_read) if f.endswith('.pkl') and f'_{fs_set}' in f]
     # convert all_files to a dictionary of lists, with fname.split("_")[0] as key
     data_dict = {}
     for file in tqdm(all_files):
@@ -120,6 +123,6 @@ for msize in model_dirs:
     for key in tqdm(data_dict):
         data_dict[key] = combine_dicts(data_dict[key])
     for key in tqdm(data_dict):
-        pd.to_pickle(data_dict[key], f'zcps/{msize}/{key}_trace_all_5.pkl')
+        pd.to_pickle(data_dict[key], f'zcps/{msize}/{key}_trace_all_{fs_set}.pkl')
 
 

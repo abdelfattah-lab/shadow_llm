@@ -1,4 +1,4 @@
-if True:
+if False:
     # tasks = ["piqa", "copa", "winogrande", "record", "hellaswag", "arc_easy"]
     # tasks_imp_path = ["piqa", "copa", "main", "winogrande_xl", "rte", "record", "hellaswag", "ARC-Easy", "wsc", "wic"]
     tasks = ["wikitext"]
@@ -28,8 +28,41 @@ if True:
     with open("pred_ablation_1.3b.sh", "w") as f:
         for command in command_list:
             f.write(command + "\n")
-
 if True:
+    # tasks = ["piqa", "copa", "winogrande", "record", "hellaswag", "arc_easy"]
+    # tasks_imp_path = ["piqa", "copa", "main", "winogrande_xl", "rte", "record", "hellaswag", "ARC-Easy", "wsc", "wic"]
+    tasks = ["wikitext"]
+    tasks_imp_path = ["wikitext"]
+    tasks_imp_path_dict = dict(zip(tasks, tasks_imp_path))
+    # zcps = ["fisher", "grasp", "grad_norm", "plainact", "snip", "nwot", "l2_norm"]
+    zcps = ["plainact", "l2_norm"]
+    prune_modes = ["perlayer", "global"]
+    # prune_modes = ["global"]
+    predmethods = ["dejavu", "predictor", "predictorL"]
+    command_list = []
+    for task in tasks:
+        print(f'######################### Starting Task {task} #########################')
+        command_list.append(f'######################### Starting Task {task} #########################')
+        for zcp in zcps:
+            print(f'######################### Starting ZCP {zcp} #########################')
+            command_list.append(f'######################### Starting ZCP {zcp} #########################')
+            for basemethod in predmethods:
+                if f'{basemethod}_{zcp}' not in ["dejavu_l2_norm", "predictor_plainact", "predictorL_plainact"]:
+                    continue
+                print(f'######################### Starting Method {basemethod} #########################')
+                command_list.append(f'######################### Starting Method {basemethod} #########################')
+                for prune_mode in prune_modes:
+                    for prune_perc in [20, 25, 30, 35, 40, 45, 50, 55, 60]:
+                        base_cmd = f'sbatch --requeue slurmrunner.slurm "python main.py --model opt --model_args prune_style={prune_mode},ffn_percent_mask={prune_perc},fcmaskmethod=fc,aggr_all=False,zcp_calc={zcp},pretrained=facebook/opt-1.3b,model_cache_dir=opt1.3b_checkpoints,tokenizer_cache_dir=opt1.3b_tokenizer,mask_heads=1,head_importance_path=zcps/opt-1.3b/{zcp}_all_5.pkl,head_percent_mask={prune_perc},maskmethod={basemethod},predictor_=all --tasks {task} --output_path results/1.3b/piqa/0shot_piqa_predictor.txt --batch_size 1 --num_fewshot 0 --method predictor"'
+                        command_list.append(base_cmd)
+                        print(base_cmd)
+
+    # Save every command to a file with name "eval_aggr_zcp_1.3b.sh"
+    with open("loc_glob_1.3b.sh", "w") as f:
+        for command in command_list:
+            f.write(command + "\n")
+
+if False:
     zcp_list = ["fisher", "grasp", "grad_norm", "plainact", "snip", "nwot", "l2_norm"]
     tasks = ["all"]
     tasks_imp_path = ["all"]
@@ -97,13 +130,41 @@ if False:
         for zcp in zcp_list:
             print(f'######################### Starting ZCP {zcp} #########################')
             command_list.append(f'######################### Starting ZCP {zcp} #########################')
-            for prune_perc in [50, 60, 70, 80, 85, 90, 91, 92, 93, 94, 95]:
+            # for prune_perc in [50, 60, 70, 80, 85, 90, 91, 92, 93, 94, 95]:
+            for prune_perc in [15, 20, 25, 30, 35, 40, 45, 50, 55, 60]:
                 base_cmd = f'sbatch --requeue slurmrunner.slurm "python main.py --model opt --model_args prune_style={prune_mode},ffn_percent_mask={prune_perc},fcmaskmethod=fc,aggr_all=False,zcp_calc={zcp},pretrained=facebook/opt-1.3b,model_cache_dir=opt1.3b_checkpoints,tokenizer_cache_dir=opt1.3b_tokenizer,mask_heads=1,head_importance_path=zcps/opt-1.3b/{zcp}_all_{fews}.pkl,head_percent_mask={prune_perc},maskmethod=original,predictor_={task} --tasks wikitext --output_path results/1.3b/piqa/{fews}shot_piqa_original.txt --batch_size 1 --num_fewshot 0 --method original"'
                 command_list.append(base_cmd)
                 print(base_cmd)
 
     # Save every command to a file with name "eval_aggr_zcp_1.3b.sh"
-    with open("wikitext_eval_aggr_zcp_1.3b.sh", "w") as f:
+    with open("wikitext_eval_aggr_zcp_1.3b_lowsparse.sh", "w") as f:
+        for command in command_list:
+            f.write(command + "\n")
+            
+
+if False:
+    zcp_list = ["fisher", "plainact", "l2_norm"]
+    tasks = ["wikitext"]
+    tasks_imp_path = ["wikitext"]
+    tasks_imp_path_dict = dict(zip(tasks, tasks_imp_path))
+    prune_mode = "perlayer"
+    fewshot_list = [0,3,5]
+    command_list = []
+    for task in tasks:
+        print(f'######################### Starting Task {task} #########################')
+        command_list.append(f'######################### Starting Task {task} #########################')
+        for fews in fewshot_list:
+            for zcp in zcp_list:
+                print(f'######################### Starting ZCP {zcp} #########################')
+                command_list.append(f'######################### Starting ZCP {zcp} #########################')
+                # for prune_perc in [50, 60, 70, 80, 85, 90, 91, 92, 93, 94, 95]:
+                for prune_perc in [10, 15, 20, 25, 30, 35, 40]:
+                    base_cmd = f'sbatch --requeue slurmrunner.slurm "python main.py --model opt --model_args prune_style={prune_mode},ffn_percent_mask={prune_perc},fcmaskmethod=fc,aggr_all=False,zcp_calc={zcp},pretrained=facebook/opt-1.3b,model_cache_dir=opt1.3b_checkpoints,tokenizer_cache_dir=opt1.3b_tokenizer,mask_heads=1,head_importance_path=zcps/opt-1.3b/{zcp}_all_{fews}.pkl,head_percent_mask={prune_perc},maskmethod=original,predictor_={task} --tasks wikitext --output_path results/1.3b/piqa/{fews}shot_piqa_original.txt --batch_size 1 --num_fewshot 0 --method original"'
+                    command_list.append(base_cmd)
+                    print(base_cmd)
+
+    # Save every command to a file with name "eval_aggr_zcp_1.3b.sh"
+    with open("wikitext_fewshot_eval_aggr_zcp_1.3b_lowsparse.sh", "w") as f:
         for command in command_list:
             f.write(command + "\n")
             

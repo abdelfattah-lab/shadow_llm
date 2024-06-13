@@ -31,16 +31,16 @@ sc1 = ax.scatter(df['latency_shadowllm'], df['mean_acc_shadowllm'], c=colors, ma
 
 # DejaVu
 ax.plot(df['latency_dejavu'], df['mean_acc_dejavu'], linestyle='--', color='gray', zorder=1)
-sc2 = ax.scatter(df['latency_dejavu'], df['mean_acc_dejavu'], c=colors, marker='o', s=200, label='DejaVu', zorder=3)
+sc2 = ax.scatter(df['latency_dejavu'], df['mean_acc_dejavu'], c=colors, marker='o', s=200, label='DejaVu-Style', zorder=3)
 
 # Labels and Title
 ax.set_xlabel('Latency (ms)', fontsize=24)
 ax.set_ylabel('Accuracy (%)', fontsize=24)
-ax.set_title('Latency vs. Accuracy on OPT-13B', fontsize=24)
+ax.set_title('Accuracy vs. Latency on OPT-13B', fontsize=24)
 
 ax.grid(True)
 # Legend
-ax.legend(fontsize=22, loc='lower right')
+ax.legend(fontsize=20, loc='lower right')
 
 # Adjust layout to make space for colorbar
 plt.tight_layout(rect=[0, 0, 0.89, 1])

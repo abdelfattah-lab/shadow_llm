@@ -104,17 +104,17 @@ def plot_rank_variance(data, num_elements, title, ylabel, filename):
 for filename in tqdm(filelist):
     if "grad_norm" not in filename:
         continue
-    with open('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3b/' + filename, 'rb') as f:
+    with open('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3B/' + filename, 'rb') as f:
         data = pickle.load(f)
     # make powerlaw_ablation directory
     os.makedirs("powerlaw_ablation", exist_ok=True)
     # Plot for heads
-    plot_rank_variance(data, nlayers*nheads, 'Head Activation Rank Variance of OPT-1.3b', 'Rank Variance', f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_1.3b_variance.pdf')
-    print(f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_1.3b_variance.pdf' + " saved")
+    plot_rank_variance(data, nlayers*nheads, 'Head Activation Rank Variance of OPT-1.3B', 'Rank Variance', f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_1.3B_variance.pdf')
+    print(f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_1.3B_variance.pdf' + " saved")
 
 
 # for filename in tqdm(filelist):
-#     with open('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3b/' + filename, 'rb') as f:
+#     with open('/home/ya255/projects/shadow_llm/llm-interpret/lm-evaluation-harness/zcps/opt-1.3B/' + filename, 'rb') as f:
 #         data = pickle.load(f)
 #     # Plot for FFN neurons
 #     plot_rank_variance(data, 24*8192, 'Variance of Ranks Across FFN Neurons', 'Rank Variance', f'powerlaw_ablation/{filename.replace("_trace_all_5.pkl","")}_ffn_variance.png')

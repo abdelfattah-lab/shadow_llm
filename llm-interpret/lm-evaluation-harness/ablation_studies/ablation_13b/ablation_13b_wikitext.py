@@ -30,8 +30,8 @@ prune_modes = combined_data['prune_mode'].unique()
 predmethods = combined_data['predmethod'].unique()
 
 zcpmap = {"plainact": "PlainAct", "l2_norm": "L2Norm"}
-predmap = {"predictorL": "ShadowLLM", "dejavu": "DejaVu"}
-pmode_map = {"global": "Global", "perlayer": "Per-Layer"}
+predmap = {"predictorL": "ShadowLLM", "dejavu": "DejaVu-Style"}
+pmode_map = {"global": "Global", "perlayer": "Local"}
 
 # Set plot styles for IEEE scientific standard
 plt.rcParams.update({
@@ -111,8 +111,8 @@ zcps = combined_data['zcp'].unique()
 predmethods = combined_data['predmethod'].unique()
 
 zcpmap = {"plainact": "PlainAct", "l2_norm": "L2Norm"}
-predmap = {"predictorL": "ShadowLLM", "dejavu": "DejaVu"}
-pmode_map = {"global": "Global", "perlayer": "Per-Layer"}
+predmap = {"predictorL": "ShadowLLM", "dejavu": "DejaVu-Style"}
+pmode_map = {"global": "Global", "perlayer": "Local"}
 
 # Set plot styles for IEEE scientific standard
 plt.rcParams.update({
@@ -241,7 +241,7 @@ for data in accuracy_diff:
 # Thin horizontal red line at accuracy_diff = 0 for all sparsities with no label
 ax.axhline(y=0, color='r', linestyle='--')
 
-ax.set_title('Accuracy Improvement of ShadowLLM over DejaVu on OPT-13B', fontsize=24)
+ax.set_title('Acc Improvement of ShadowLLM over DejaVu-Style on OPT-13B', fontsize=24)
 ax.set_xlabel('Sparsity (%)', fontsize=24)
 ax.set_ylabel('Accuracy Improvement (%)', fontsize=24)
 ax.grid(True)
